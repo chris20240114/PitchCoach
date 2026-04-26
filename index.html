@@ -25,6 +25,7 @@
           <div class="camera-panel">
             <video id="camera" autoplay playsinline muted></video>
             <canvas id="visionCanvas" width="320" height="180" aria-hidden="true"></canvas>
+            <canvas id="trackingOverlay" width="320" height="180" aria-hidden="true"></canvas>
             <div class="camera-overlay">
               <span id="cameraStatus">Camera off</span>
               <span id="timer">00:00</span>
@@ -66,8 +67,11 @@
               <span id="signalStatus">Waiting</span>
             </div>
             <div class="signal-list">
-              <div>
-                <span>Eye contact</span>
+              <div class="signal-row signal-detail">
+                <div>
+                  <span>Eye movement</span>
+                  <p id="eyeFeedback" class="signal-feedback">Waiting for camera</p>
+                </div>
                 <strong id="eyeSignal">--</strong>
               </div>
               <div>
@@ -81,6 +85,25 @@
               <div>
                 <span>Movement</span>
                 <strong id="movementSignal">--</strong>
+              </div>
+              <div>
+                <span>Volume</span>
+                <strong id="volumeSignal">--</strong>
+              </div>
+              <div>
+                <span>Vocal energy</span>
+                <strong id="energySignal">--</strong>
+              </div>
+              <div>
+                <span>Pitch range</span>
+                <strong id="pitchSignal">--</strong>
+              </div>
+              <div class="signal-row signal-detail">
+                <div>
+                  <span>Pause rhythm</span>
+                  <p id="audioFeedback" class="signal-feedback">Waiting for microphone</p>
+                </div>
+                <strong id="pauseSignal">--</strong>
               </div>
             </div>
           </article>
@@ -122,6 +145,6 @@
         </section>
       </section>
     </main>
-    <script src="app.js"></script>
+    <script type="module" src="app.js"></script>
   </body>
 </html>

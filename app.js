@@ -1,6 +1,8 @@
 const camera = document.querySelector("#camera");
 const canvas = document.querySelector("#visionCanvas");
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
+const trackingOverlay = document.querySelector("#trackingOverlay");
+const overlayCtx = trackingOverlay.getContext("2d");
 const startBtn = document.querySelector("#startBtn");
 const stopBtn = document.querySelector("#stopBtn");
 const retryBtn = document.querySelector("#retryBtn");
@@ -17,9 +19,15 @@ const contentList = document.querySelector("#contentList");
 const rewriteText = document.querySelector("#rewriteText");
 const followupText = document.querySelector("#followupText");
 const eyeSignal = document.querySelector("#eyeSignal");
+const eyeFeedback = document.querySelector("#eyeFeedback");
 const positionSignal = document.querySelector("#positionSignal");
 const lightingSignal = document.querySelector("#lightingSignal");
 const movementSignal = document.querySelector("#movementSignal");
+const volumeSignal = document.querySelector("#volumeSignal");
+const energySignal = document.querySelector("#energySignal");
+const pitchSignal = document.querySelector("#pitchSignal");
+const pauseSignal = document.querySelector("#pauseSignal");
+const audioFeedback = document.querySelector("#audioFeedback");
 const uploadFile = document.querySelector("#uploadFile");
 const uploadStatus = document.querySelector("#uploadStatus");
 const uploadTranscript = document.querySelector("#uploadTranscript");
@@ -28,18 +36,44 @@ const clearUploadBtn = document.querySelector("#clearUploadBtn");
 const mediaPreview = document.querySelector("#mediaPreview");
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+const MEDIAPIPE_VISION_BUNDLE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+const MEDIAPIPE_MODEL_ASSET = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 
 const state = {
   mode: "hackathon",
   stream: null,
   recognition: null,
+  speechBlocked: false,
+  faceLandmarker: null,
+  faceLandmarkerReady: false,
+  faceLandmarkerError: "",
+  faceLandmarkerPromise: null,
+  faceDetector: null,
   startedAt: 0,
   timerId: null,
   visionId: null,
+  audioId: null,
   transcript: "",
   interim: "",
   samples: [],
+  audioSamples: [],
   lastFrame: null,
+  lastGazeBias: 0,
+  lastEyeMid: null,
+  lastFaceCenter: null,
+  eyeAlertUntil: 0,
+  eyeRecentLevel: 0,
+  audioContext: null,
+  audioAnalyser: null,
+  audioSource: null,
+  audioData: null,
+  lastSpeechAt: 0,
+  lastSilentAt: 0,
+  pauseMoments: [],
+  recentPauseMs: 0,
+  recentPitch: 0,
+  recentPitchDelta: 0,
+  speechActive: false,
   uploadUrl: "",
   uploadDuration: 60,
   uploadMedia: null,
@@ -82,17 +116,20 @@ async function startSession() {
   state.transcript = "";
   state.interim = "";
   state.samples = [];
+  state.speechBlocked = false;
   state.startedAt = Date.now();
-  transcriptEl.textContent = "";
+  transcriptEl.textContent = "Listening...";
+  speechStatus.textContent = "Starting";
   startBtn.disabled = true;
   stopBtn.disabled = false;
   retryBtn.disabled = true;
 
   await startCamera();
+  initFaceLandmarker();
   startSpeech();
   startTimer();
   startVisionLoop();
-  say(audienceCopy[state.mode].start, "nodding");
+  updateCoach(audienceCopy[state.mode].start, "nodding");
 }
 
 async function startCamera() {
@@ -107,14 +144,50 @@ async function startCamera() {
   try {
     state.stream = await navigator.mediaDevices.getUserMedia({
       video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
-      audio: false,
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
     });
     camera.srcObject = state.stream;
     cameraStatus.textContent = "Camera on";
+    startAudioAnalysis();
   } catch (error) {
     cameraStatus.textContent = "Camera unavailable";
     addVisionSample({ lighting: 0, movement: 0, centered: 0, eye: 0 });
   }
+}
+
+function initFaceLandmarker() {
+  if (state.faceLandmarker || state.faceLandmarkerPromise) return state.faceLandmarkerPromise;
+
+  state.faceLandmarkerPromise = (async () => {
+    try {
+      const visionModule = await import(`${MEDIAPIPE_VISION_BUNDLE}/vision_bundle.mjs`);
+      const { FilesetResolver, FaceLandmarker } = visionModule;
+      const vision = await FilesetResolver.forVisionTasks(`${MEDIAPIPE_VISION_BUNDLE}/wasm`);
+      state.faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: MEDIAPIPE_MODEL_ASSET },
+        runningMode: "VIDEO",
+        numFaces: 1,
+        minFaceDetectionConfidence: 0.5,
+        minFacePresenceConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+        outputFaceBlendshapes: false,
+        outputFacialTransformationMatrixes: false,
+      });
+      state.faceLandmarkerReady = true;
+      state.faceLandmarkerError = "";
+    } catch (error) {
+      state.faceLandmarkerReady = false;
+      state.faceLandmarkerError = String(error?.message || error || "MediaPipe unavailable");
+    } finally {
+      state.faceLandmarkerPromise = null;
+    }
+  })();
+
+  return state.faceLandmarkerPromise;
 }
 
 function startSpeech() {
@@ -122,6 +195,10 @@ function startSpeech() {
     speechStatus.textContent = "Speech unsupported";
     transcriptEl.textContent = "Speech recognition is not available in this browser. You can still stop the session and use the sample analysis.";
     return;
+  }
+
+  if ("speechSynthesis" in window) {
+    window.speechSynthesis.cancel();
   }
 
   const recognition = new SpeechRecognition();
@@ -152,12 +229,16 @@ function startSpeech() {
     maybeInterrupt();
   };
 
-  recognition.onerror = () => {
-    speechStatus.textContent = "Speech paused";
+  recognition.onerror = (event) => {
+    state.speechBlocked = true;
+    speechStatus.textContent = speechErrorLabel(event.error);
+    if (!state.transcript.trim() && !state.interim.trim()) {
+      transcriptEl.textContent = speechErrorMessage(event.error);
+    }
   };
 
   recognition.onend = () => {
-    if (stopBtn.disabled === false) {
+    if (stopBtn.disabled === false && !state.speechBlocked) {
       try {
         recognition.start();
       } catch {
@@ -167,7 +248,13 @@ function startSpeech() {
   };
 
   state.recognition = recognition;
-  recognition.start();
+  try {
+    recognition.start();
+  } catch {
+    state.speechBlocked = true;
+    speechStatus.textContent = "Speech failed";
+    transcriptEl.textContent = "Speech recognition could not start. Open this app in Chrome on http://localhost:3000 and allow microphone access.";
+  }
 }
 
 function startTimer() {
@@ -178,8 +265,49 @@ function startTimer() {
   }, 250);
 }
 
-function startVisionLoop() {
+function startAudioAnalysis() {
+  if (!state.stream?.getAudioTracks().length) {
+    audioFeedback.textContent = "Microphone stream unavailable";
+    return;
+  }
+  if (state.audioAnalyser) return;
+
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    audioFeedback.textContent = "Audio analysis unsupported";
+    return;
+  }
+
+  try {
+    state.audioContext = new AudioContextClass();
+    state.audioSource = state.audioContext.createMediaStreamSource(state.stream);
+    state.audioAnalyser = state.audioContext.createAnalyser();
+    state.audioAnalyser.fftSize = 2048;
+    state.audioAnalyser.smoothingTimeConstant = 0.72;
+    state.audioData = new Float32Array(state.audioAnalyser.fftSize);
+    state.audioSource.connect(state.audioAnalyser);
+    state.lastSilentAt = performance.now();
+    startAudioLoop();
+  } catch {
+    audioFeedback.textContent = "Microphone analysis unavailable";
+  }
+}
+
+function startAudioLoop() {
   const loop = () => {
+    if (!state.audioAnalyser || !state.audioData) return;
+    state.audioAnalyser.getFloatTimeDomainData(state.audioData);
+    const sample = analyzeAudioFrame(state.audioData, state.audioContext?.sampleRate || 48000);
+    addAudioSample(sample);
+    renderAudioSignals(sample);
+    state.audioId = requestAnimationFrame(loop);
+  };
+
+  loop();
+}
+
+function startVisionLoop() {
+  const loop = async () => {
     if (!state.stream || camera.readyState < 2) {
       state.visionId = requestAnimationFrame(loop);
       return;
@@ -187,7 +315,7 @@ function startVisionLoop() {
 
     ctx.drawImage(camera, 0, 0, canvas.width, canvas.height);
     const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const sample = analyzeFrame(frame);
+    const sample = await analyzeFrame(frame);
     addVisionSample(sample);
     renderSignals(sample);
     state.visionId = requestAnimationFrame(loop);
@@ -196,7 +324,7 @@ function startVisionLoop() {
   loop();
 }
 
-function analyzeFrame(frame) {
+async function analyzeFrame(frame) {
   const data = frame.data;
   let total = 0;
   let left = 0;
@@ -227,21 +355,110 @@ function analyzeFrame(frame) {
   const centered = Math.min(centerMass / Math.max(total * 0.34, 1), 1);
   const movement = state.lastFrame ? Math.min(diff / Math.max(count * 55, 1), 1) : 0;
   const eye = Math.max(0, Math.min((balance + centered + (top > total * 0.38 ? 0.25 : 0)) / 2.25, 1));
-
-  return { lighting, movement, centered, eye };
+  const horizontalBias = (right - left) / Math.max(left + right, 1);
+  const drift = Math.min(Math.abs(horizontalBias) * 1.3 + (1 - centered) * 0.9, 1);
+  const focusX = canvas.width * (0.5 + horizontalBias * 0.18);
+  const focusY = canvas.height * (0.46 - Math.min(Math.max((top / Math.max(total, 1)) - 0.5, -0.12), 0.12));
+  const boxWidth = canvas.width * (0.2 + centered * 0.22);
+  const boxHeight = boxWidth * 1.18;
+  const heuristic = {
+    lighting,
+    movement,
+    centered,
+    eye,
+    drift,
+    focusX,
+    focusY,
+    boxWidth,
+    boxHeight,
+    horizontalBias,
+    faceDetected: false,
+    faceDetectorActive: false,
+    trackingMode: "heuristic",
+  };
+  const detected = await detectFaceSample();
+  return detected ? { ...heuristic, ...detected } : heuristic;
 }
 
 function addVisionSample(sample) {
-  state.samples.push({ ...sample, at: Date.now() });
+  const now = Date.now();
+  state.samples.push({ ...sample, at: now });
   if (state.samples.length > 600) state.samples.shift();
+  Object.assign(sample, computeRecentEyeActivity(sample, now));
+}
+
+function analyzeAudioFrame(buffer, sampleRate) {
+  let sumSquares = 0;
+  let peak = 0;
+  for (let index = 0; index < buffer.length; index += 1) {
+    const value = buffer[index];
+    sumSquares += value * value;
+    peak = Math.max(peak, Math.abs(value));
+  }
+
+  const rms = Math.sqrt(sumSquares / buffer.length);
+  const db = 20 * Math.log10(Math.max(rms, 0.00001));
+  const voiced = rms > 0.018;
+  const pitchHz = voiced ? detectPitch(buffer, sampleRate) : 0;
+  const now = performance.now();
+
+  if (voiced) {
+    if (!state.speechActive && state.lastSilentAt) {
+      const pauseMs = now - state.lastSilentAt;
+      if (pauseMs > 220) {
+        state.pauseMoments.push(pauseMs);
+        if (state.pauseMoments.length > 18) state.pauseMoments.shift();
+        state.recentPauseMs = pauseMs;
+      }
+    }
+    state.lastSpeechAt = now;
+  } else if (state.speechActive) {
+    state.lastSilentAt = now;
+  }
+
+  state.speechActive = voiced;
+  const pitchDelta = pitchHz && state.recentPitch ? Math.abs(pitchHz - state.recentPitch) : 0;
+  if (pitchHz) {
+    state.recentPitch = pitchHz;
+    state.recentPitchDelta = pitchDelta;
+  }
+
+  return {
+    rms,
+    db,
+    peak,
+    voiced,
+    pitchHz,
+    pitchDelta,
+    pauseMs: state.recentPauseMs,
+  };
+}
+
+function addAudioSample(sample) {
+  state.audioSamples.push({ ...sample, at: Date.now() });
+  if (state.audioSamples.length > 600) state.audioSamples.shift();
+}
+
+function renderAudioSignals(sample) {
+  setMetric(volumeSignal, volumeLabel(sample.db), volumeScore(sample.db));
+  setMetric(energySignal, energyLabel(sample), energyScore(sample));
+  setMetric(pitchSignal, pitchLabel(sample), pitchScore(sample));
+  setMetric(pauseSignal, pauseLabel(sample), pauseScore(sample));
+  audioFeedback.textContent = audioFeedbackText(sample);
 }
 
 function renderSignals(sample) {
-  signalStatus.textContent = "Tracking";
-  setMetric(eyeSignal, sample.eye > 0.72 ? "steady" : sample.eye > 0.48 ? "mixed" : "drifting", sample.eye);
-  setMetric(positionSignal, sample.centered > 0.62 ? "centered" : sample.centered > 0.38 ? "okay" : "off center", sample.centered);
+  signalStatus.textContent = sample.faceDetectorActive && !sample.faceDetected
+    ? "Searching face"
+    : sample.trackingMode === "mediapipe"
+      ? "Tracking face mesh"
+      : "Tracking";
+  setMetric(eyeSignal, eyeMovementLabel(sample), eyeMovementScore(sample));
+  eyeFeedback.textContent = eyeMovementFeedback(sample);
+  setMetric(positionSignal, facePositionLabel(sample), sample.faceDetectorActive && !sample.faceDetected ? 0.2 : sample.centered);
   setMetric(lightingSignal, sample.lighting > 84 ? "clear" : sample.lighting > 48 ? "dim" : "too dark", sample.lighting / 120);
-  setMetric(movementSignal, sample.movement > 0.34 ? "active" : sample.movement > 0.1 ? "natural" : "still", sample.movement * 2);
+  setMetric(movementSignal, headMovementLabel(sample), headMovementScore(sample));
+  renderTrackingOverlay(sample);
 }
 
 function setMetric(element, text, score) {
@@ -271,6 +488,7 @@ function stopSession() {
 
   window.clearInterval(state.timerId);
   cancelAnimationFrame(state.visionId);
+  cancelAnimationFrame(state.audioId);
   if (wasRunning) showFeedback();
 }
 
@@ -280,14 +498,36 @@ function resetSession() {
   state.interim = "";
   state.samples = [];
   state.lastFrame = null;
+  state.lastGazeBias = 0;
+  state.lastEyeMid = null;
+  state.lastFaceCenter = null;
+  state.eyeAlertUntil = 0;
+  state.eyeRecentLevel = 0;
+  state.audioSamples = [];
+  state.lastSpeechAt = 0;
+  state.lastSilentAt = 0;
+  state.pauseMoments = [];
+  state.recentPauseMs = 0;
+  state.recentPitch = 0;
+  state.recentPitchDelta = 0;
+  state.speechActive = false;
+  state.speechBlocked = false;
+  state.faceDetector = null;
   transcriptEl.textContent = "Your pitch transcript will appear here as you speak.";
   timerEl.textContent = "00:00";
   speechStatus.textContent = "Speech idle";
   signalStatus.textContent = "Waiting";
   eyeSignal.textContent = "--";
+  eyeFeedback.textContent = "Waiting for camera";
   positionSignal.textContent = "--";
   lightingSignal.textContent = "--";
   movementSignal.textContent = "--";
+  volumeSignal.textContent = "--";
+  energySignal.textContent = "--";
+  pitchSignal.textContent = "--";
+  pauseSignal.textContent = "--";
+  audioFeedback.textContent = "Waiting for microphone";
+  clearTrackingOverlay();
   resetDashboard();
   say("Ready when you are. Start with the person who has the problem.", "listening");
 }
@@ -316,8 +556,9 @@ async function showFeedback(source = {}) {
   const fillers = countFillers(transcript);
   const wpm = Math.round((words.length / elapsed) * 60);
   const visual = source.visual || summarizeVision();
+  const audio = source.audio || summarizeAudio();
   const scores = scoreContent(transcript);
-  const fallback = buildLocalFeedback({ fillers, scores, transcript, visual, wpm });
+  const fallback = buildLocalFeedback({ fillers, scores, transcript, visual, audio, wpm });
   const feedback = await requestCoachFeedback({
     audience: state.mode,
     transcript,
@@ -327,6 +568,7 @@ async function showFeedback(source = {}) {
       fillerWords: fillers.total,
     },
     visual,
+    audio,
   }, fallback);
 
   renderList(deliveryList, feedback.delivery);
@@ -352,15 +594,18 @@ async function requestCoachFeedback(payload, fallback) {
   }
 }
 
-function buildLocalFeedback({ fillers, scores, transcript, visual, wpm }) {
+function buildLocalFeedback({ fillers, scores, transcript, visual, audio, wpm }) {
   return {
-    coachResponse: buildSpokenFeedback(wpm, fillers.total, scores, visual),
+    coachResponse: buildSpokenFeedback(wpm, fillers.total, scores, visual, audio),
     delivery: [
       { label: "Speaking pace", value: paceLabel(wpm), score: paceScore(wpm) },
+      { label: "Volume", value: audio.volume, score: audio.volumeScore },
+      { label: "Pitch range", value: audio.pitch, score: audio.pitchScore },
+      { label: "Pause rhythm", value: audio.pause, score: audio.pauseScore },
+      { label: "Vocal energy", value: audio.energy, score: audio.energyScore },
       { label: "Eye contact", value: visual.eye, score: visual.eyeScore },
       { label: "Filler words", value: `${fillers.total}`, score: fillers.total <= 4 ? 0.9 : fillers.total <= 9 ? 0.55 : 0.25 },
-      { label: "Pauses", value: wpm > 165 ? "too few" : "workable", score: wpm > 165 ? 0.35 : 0.75 },
-      { label: "Energy", value: visual.movement, score: visual.movementScore },
+      { label: "Head movement", value: visual.movement, score: visual.movementScore },
     ],
     content: [
       { label: "Clear problem", value: `${scores.problem}/10`, score: scores.problem / 10 },
@@ -445,7 +690,7 @@ function handleUploadFile() {
   }
 }
 
-function analyzeUpload() {
+async function analyzeUpload() {
   const transcript = uploadTranscript.value.trim();
 
   if (!transcript) {
@@ -459,7 +704,7 @@ function analyzeUpload() {
   transcriptEl.textContent = transcript;
   speechStatus.textContent = "Upload analyzed";
 
-  const visual = summarizeUploadVisual();
+  const visual = await summarizeUploadVisual();
   showFeedback({
     transcript,
     durationSeconds: state.uploadDuration || estimateDurationFromTranscript(transcript),
@@ -467,7 +712,7 @@ function analyzeUpload() {
   });
 }
 
-function summarizeUploadVisual() {
+async function summarizeUploadVisual() {
   const media = state.uploadMedia;
   if (!media || media.tagName !== "VIDEO" || media.readyState < 2) {
     return { eye: "not measured", eyeScore: 0.45, movement: "not measured", movementScore: 0.45 };
@@ -475,10 +720,10 @@ function summarizeUploadVisual() {
 
   try {
     ctx.drawImage(media, 0, 0, canvas.width, canvas.height);
-    const sample = analyzeFrame(ctx.getImageData(0, 0, canvas.width, canvas.height));
+    const sample = await analyzeFrame(ctx.getImageData(0, 0, canvas.width, canvas.height));
     return {
-      eye: sample.eye > 0.7 ? "consistent" : sample.eye > 0.48 ? "inconsistent" : "drifting down or away",
-      eyeScore: sample.eye,
+      eye: sample.faceDetectorActive && !sample.faceDetected ? "searching" : sample.drift < 0.22 ? "steady lock" : sample.drift < 0.45 ? "small scans" : "noticeable drift",
+      eyeScore: sample.faceDetectorActive && !sample.faceDetected ? 0.25 : Math.max(0, Math.min(1 - sample.drift * 0.85, 1)),
       movement: "single-frame sample",
       movementScore: Math.max(sample.movement, 0.45),
     };
@@ -536,13 +781,53 @@ function summarizeVision() {
 
   const average = (key) => state.samples.reduce((sum, item) => sum + item[key], 0) / state.samples.length;
   const eye = average("eye");
+  const drift = average("drift");
   const movement = average("movement");
 
   return {
-    eye: eye > 0.7 ? "consistent" : eye > 0.48 ? "inconsistent" : "drifting down or away",
-    eyeScore: eye,
+    eye: drift < 0.22 ? "steady lock" : drift < 0.45 ? "small scans" : "noticeable drift",
+    eyeScore: Math.max(0, Math.min(1 - drift * 0.85, 1)),
     movement: movement > 0.3 ? "expressive" : movement > 0.12 ? "natural" : "flat ending",
     movementScore: Math.min(movement * 2.4, 1),
+  };
+}
+
+function summarizeAudio() {
+  if (!state.audioSamples.length) {
+    return {
+      volume: "not measured",
+      volumeScore: 0.4,
+      energy: "not measured",
+      energyScore: 0.4,
+      pitch: "not measured",
+      pitchScore: 0.4,
+      pause: "not measured",
+      pauseScore: 0.4,
+    };
+  }
+
+  const average = (key, filter = () => true) => {
+    const relevant = state.audioSamples.filter(filter);
+    if (!relevant.length) return 0;
+    return relevant.reduce((sum, item) => sum + (item[key] || 0), 0) / relevant.length;
+  };
+  const avgDb = average("db");
+  const avgPeak = average("peak");
+  const avgPitch = average("pitchHz", (item) => item.pitchHz > 0);
+  const avgPitchDelta = average("pitchDelta");
+  const avgPause = state.pauseMoments.length
+    ? state.pauseMoments.reduce((sum, item) => sum + item, 0) / state.pauseMoments.length
+    : 0;
+
+  return {
+    volume: volumeLabel(avgDb),
+    volumeScore: volumeScore(avgDb),
+    energy: avgPeak > 0.16 ? "animated" : avgPeak > 0.09 ? "steady" : "flat",
+    energyScore: avgPeak > 0.16 ? 0.88 : avgPeak > 0.09 ? 0.62 : 0.34,
+    pitch: avgPitchDelta > 28 ? "varied" : avgPitchDelta > 12 ? "moderate" : "monotone",
+    pitchScore: avgPitchDelta > 28 ? 0.86 : avgPitchDelta > 12 ? 0.6 : 0.32,
+    pause: avgPause > 1100 ? "long gaps" : avgPause > 420 ? "healthy pauses" : "few pauses",
+    pauseScore: avgPause > 1100 ? 0.34 : avgPause > 420 ? 0.84 : 0.46,
   };
 }
 
@@ -576,9 +861,18 @@ function buildRewrite(transcript, scores) {
   return "Tighten the strongest version into one sentence: 'PitchMirror is a live AI audience member that helps students and founders fix delivery and content before the real room is watching.'";
 }
 
-function buildSpokenFeedback(wpm, fillers, scores, visual) {
+function buildSpokenFeedback(wpm, fillers, scores, visual, audio) {
   if (scores.problem < 6) {
     return "Pause. Your pitch needs a clearer pain point. Start with who is struggling, then explain what changes when your product works.";
+  }
+  if (audio.volumeScore < 0.4) {
+    return "Your words are coming through, but the volume is low. Land your next sentence with a little more voice.";
+  }
+  if (audio.pitchScore < 0.4) {
+    return "Your pacing is workable, but the tone is flat. Add a little lift on the idea that matters most.";
+  }
+  if (audio.pauseScore < 0.42) {
+    return "The pauses are tight. Give your strongest sentence a beat so it can land.";
   }
   if (wpm > 170) {
     return `You are speaking clearly, but the pace is fast at about ${wpm} words per minute. Add a pause after your main problem sentence.`;
@@ -597,6 +891,464 @@ function countFillers(transcript) {
   return { total: matches.length, matches };
 }
 
+function eyeMovementLabel(sample) {
+  if (sample.faceDetectorActive && !sample.faceDetected) return "searching";
+  if (sample.isBlinking) return "blink";
+  const level = effectiveEyeLevel(sample);
+  if (level < 0.09 && (sample.eyeMotion ?? 0) < 0.06 && !sample.recentAlert) return "locked";
+  if (level < 0.22) return "tracking";
+  return "drifting";
+}
+
+function eyeMovementFeedback(sample) {
+  if (sample.faceDetectorActive && !sample.faceDetected) {
+    return "No face lock right now. Move back into frame so the tracker stops grabbing the background.";
+  }
+  if (sample.isBlinking) {
+    return "Blink detected. This is being ignored so normal blinking does not count as drifting.";
+  }
+  if (sample.recentAlert) {
+    return sample.recentDirection > 0
+      ? "A moment ago your eye line drifted to camera right. Re-lock on the lens and hold it for the next beat."
+      : "A moment ago your eye line drifted to camera left. Re-lock on the lens and hold it for the next beat.";
+  }
+  if (sample.trackingMode === "mediapipe") {
+    if (effectiveEyeLevel(sample) < 0.09 && (sample.eyeMotion ?? 0) < 0.06) return "Face mesh lock is steady. Your eye line is staying close to the lens.";
+    if ((sample.eyeMotion ?? 0) > 0.14) {
+      return "Face mesh sees active eye movement. You're scanning while keeping your face mostly locked.";
+    }
+    if (effectiveEyeLevel(sample) < 0.22) return sample.horizontalBias > 0
+      ? "Face mesh sees a small drift to camera right, then a return."
+      : "Face mesh sees a small drift to camera left, then a return.";
+    return sample.horizontalBias > 0
+      ? "Face mesh is still locked, but your eye line is pulling to camera right."
+      : "Face mesh is still locked, but your eye line is pulling to camera left.";
+  }
+  if (sample.trackingMode === "face") {
+    if (sample.drift < 0.18) return "Face lock is steady. This is tracking head and eye-region drift, not exact pupil gaze.";
+    if (sample.drift < 0.38) return sample.horizontalBias > 0
+      ? "Face lock is live. You're leaning a bit to camera right, then coming back."
+      : "Face lock is live. You're leaning a bit to camera left, then coming back.";
+    return sample.horizontalBias > 0
+      ? "Face lock is still on you, but your head and eye line are drifting to camera right."
+      : "Face lock is still on you, but your head and eye line are drifting to camera left.";
+  }
+  if (sample.drift < 0.22) return "Green box is holding steady. Your eyes are staying near the lens.";
+  if (sample.drift < 0.45) return sample.horizontalBias > 0
+    ? "Small scan to camera right. Settle back on the lens after each thought."
+    : "Small scan to camera left. Settle back on the lens after each thought.";
+  return sample.horizontalBias > 0
+    ? "Noticeable drift to camera right. Re-center before your next key point."
+    : "Noticeable drift to camera left. Re-center before your next key point.";
+}
+
+function renderTrackingOverlay(sample) {
+  if (!overlayCtx) return;
+
+  overlayCtx.clearRect(0, 0, trackingOverlay.width, trackingOverlay.height);
+  if (sample.faceDetectorActive && !sample.faceDetected) {
+    overlayCtx.strokeStyle = "#94a3b8";
+    overlayCtx.lineWidth = 1.2;
+    overlayCtx.setLineDash([6, 6]);
+    overlayCtx.strokeRect(trackingOverlay.width * 0.3, trackingOverlay.height * 0.16, trackingOverlay.width * 0.4, trackingOverlay.height * 0.56);
+    overlayCtx.setLineDash([]);
+    overlayCtx.fillStyle = "#e2e8f0";
+    overlayCtx.font = "700 11px Inter, sans-serif";
+    overlayCtx.fillText("SEARCHING FOR FACE", trackingOverlay.width * 0.3, trackingOverlay.height * 0.14);
+    return;
+  }
+
+  const score = Math.max(0, Math.min(1 - effectiveEyeLevel(sample), 1));
+  const stroke = score > 0.7 ? "#22c55e" : score > 0.45 ? "#f59e0b" : "#ef4444";
+  const x = Math.max(12, Math.min(sample.focusX - sample.boxWidth / 2, trackingOverlay.width - sample.boxWidth - 12));
+  const y = Math.max(12, Math.min(sample.focusY - sample.boxHeight / 2, trackingOverlay.height - sample.boxHeight - 12));
+
+  overlayCtx.lineWidth = 1.4;
+  overlayCtx.strokeStyle = stroke;
+  overlayCtx.fillStyle = `${stroke}22`;
+  overlayCtx.fillRect(x, y, sample.boxWidth, sample.boxHeight);
+  overlayCtx.strokeRect(x, y, sample.boxWidth, sample.boxHeight);
+
+  overlayCtx.beginPath();
+  overlayCtx.strokeStyle = stroke;
+  overlayCtx.moveTo(sample.focusX - 16, sample.focusY);
+  overlayCtx.lineTo(sample.focusX + 16, sample.focusY);
+  overlayCtx.moveTo(sample.focusX, sample.focusY - 10);
+  overlayCtx.lineTo(sample.focusX, sample.focusY + 10);
+  overlayCtx.stroke();
+
+  overlayCtx.fillStyle = stroke;
+  overlayCtx.font = "700 11px Inter, sans-serif";
+  overlayCtx.fillText(`EYE ${eyeMovementLabel(sample).toUpperCase()}`, x, Math.max(14, y - 6));
+}
+
+function clearTrackingOverlay() {
+  if (!overlayCtx) return;
+  overlayCtx.clearRect(0, 0, trackingOverlay.width, trackingOverlay.height);
+}
+
+function computeRecentEyeActivity(sample, now) {
+  if (sample.isBlinking) {
+    return {
+      recentAlert: now < state.eyeAlertUntil,
+      recentLevel: Math.max(0, state.eyeRecentLevel * 0.9),
+      recentDirection: 0,
+    };
+  }
+
+  const recentSamples = state.samples.filter((item) => now - item.at <= 1100);
+  const avg = (key) => recentSamples.reduce((sum, item) => sum + (item[key] ?? 0), 0) / Math.max(recentSamples.length, 1);
+  const max = (key) => recentSamples.reduce((value, item) => Math.max(value, item[key] ?? 0), 0);
+  const avgDrift = avg("drift");
+  const avgMotion = avg("eyeMotion");
+  const maxDrift = max("drift");
+  const maxMotion = max("eyeMotion");
+  const bursts = recentSamples.filter((item) => (item.eyeMotion ?? 0) > 0.1 || (item.drift ?? 0) > 0.18).length;
+  const recentDirection = recentSamples.reduce((sum, item) => sum + (item.horizontalBias ?? 0), 0);
+  const recentLevel = Math.min(Math.max(avgDrift * 0.26 + avgMotion * 1.02 + maxDrift * 0.12 + maxMotion * 0.48, 0), 1);
+
+  if (bursts >= 2 || maxMotion > 0.14 || maxDrift > 0.22) {
+    state.eyeAlertUntil = now + 1100;
+    state.eyeRecentLevel = Math.max(state.eyeRecentLevel, recentLevel, maxMotion, maxDrift * 0.8);
+  } else if (now > state.eyeAlertUntil) {
+    state.eyeRecentLevel = recentLevel * 0.4;
+  } else {
+    state.eyeRecentLevel = Math.max(state.eyeRecentLevel * 0.86, recentLevel);
+  }
+
+  return {
+    recentAlert: now < state.eyeAlertUntil,
+    recentLevel: Math.max(recentLevel, state.eyeRecentLevel),
+    recentDirection,
+  };
+}
+
+function effectiveEyeLevel(sample) {
+  if (sample.isBlinking) return 0;
+  return Math.max(sample.drift ?? 0, sample.recentLevel ?? 0, (sample.eyeMotion ?? 0) * 0.85);
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+async function detectFaceSample() {
+  const mediaPipeSample = detectMediaPipeSample();
+  if (mediaPipeSample) return mediaPipeSample;
+
+  const detector = getFaceDetector();
+  if (!detector) return null;
+
+  try {
+    const faces = await detector.detect(canvas);
+    if (!faces.length) {
+      return { faceDetected: false, faceDetectorActive: true, trackingMode: "face" };
+    }
+
+    const face = faces.reduce((largest, current) => {
+      const currentArea = current.boundingBox.width * current.boundingBox.height;
+      const largestArea = largest.boundingBox.width * largest.boundingBox.height;
+      return currentArea > largestArea ? current : largest;
+    });
+    const box = face.boundingBox;
+    const centerX = box.x + box.width / 2;
+    const centerY = box.y + box.height / 2;
+    const landmarks = Object.fromEntries((face.landmarks || []).map((point) => [point.type, point.locations?.[0] || point]));
+    const leftEye = landmarks.leftEye;
+    const rightEye = landmarks.rightEye;
+    const eyeMidX = leftEye && rightEye ? (leftEye.x + rightEye.x) / 2 : centerX;
+    const eyeMidY = leftEye && rightEye ? (leftEye.y + rightEye.y) / 2 : centerY - box.height * 0.14;
+    const horizontalBias = (eyeMidX - canvas.width / 2) / Math.max(canvas.width / 2, 1);
+    const verticalBias = (eyeMidY - canvas.height * 0.42) / Math.max(canvas.height * 0.42, 1);
+    const centered = Math.max(0, 1 - (Math.abs(centerX - canvas.width / 2) / (canvas.width / 2)) * 0.85 - (Math.abs(centerY - canvas.height / 2) / (canvas.height / 2)) * 0.5);
+    const drift = Math.min(Math.abs(horizontalBias) * 1.1 + Math.abs(verticalBias) * 0.35 + (1 - centered) * 0.25, 1);
+    return {
+      faceDetected: true,
+      faceDetectorActive: true,
+      trackingMode: "face",
+      centered,
+      eye: Math.max(0, Math.min(1 - drift * 0.7, 1)),
+      drift,
+      focusX: eyeMidX,
+      focusY: eyeMidY,
+      boxWidth: Math.max(box.width, canvas.width * 0.18),
+      boxHeight: Math.max(box.height, canvas.height * 0.28),
+      horizontalBias,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function sampleFromLandmarks(landmarks) {
+  const bounds = landmarks.reduce((box, landmark) => ({
+    minX: Math.min(box.minX, landmark.x),
+    minY: Math.min(box.minY, landmark.y),
+    maxX: Math.max(box.maxX, landmark.x),
+    maxY: Math.max(box.maxY, landmark.y),
+  }), { minX: 1, minY: 1, maxX: 0, maxY: 0 });
+  const boxWidth = (bounds.maxX - bounds.minX) * canvas.width;
+  const boxHeight = (bounds.maxY - bounds.minY) * canvas.height;
+  const centerX = ((bounds.minX + bounds.maxX) / 2) * canvas.width;
+  const centerY = ((bounds.minY + bounds.maxY) / 2) * canvas.height;
+  const eyeMid = averagePoints(landmarks, [33, 133, 362, 263]);
+  const leftIris = averagePoints(landmarks, [468, 469, 470, 471, 472]);
+  const rightIris = averagePoints(landmarks, [473, 474, 475, 476, 477]);
+  const leftBlinkRatio = eyeOpenRatio(landmarks[159], landmarks[145], landmarks[33], landmarks[133]);
+  const rightBlinkRatio = eyeOpenRatio(landmarks[386], landmarks[374], landmarks[362], landmarks[263]);
+  const blinkRatio = (leftBlinkRatio + rightBlinkRatio) / 2;
+  const isBlinking = blinkRatio < 0.16;
+  const leftEyeRatio = eyeRatio(landmarks[33], landmarks[133], leftIris);
+  const rightEyeRatio = eyeRatio(landmarks[362], landmarks[263], rightIris);
+  const gazeBias = clamp((leftEyeRatio + rightEyeRatio) / 2, -1, 1);
+  const faceCenter = { x: centerX / canvas.width, y: centerY / canvas.height };
+  const headShift = state.lastFaceCenter
+    ? Math.hypot(faceCenter.x - state.lastFaceCenter.x, faceCenter.y - state.lastFaceCenter.y)
+    : 0;
+  const gazeShift = isBlinking ? 0 : Math.abs(gazeBias - state.lastGazeBias);
+  const eyeMotion = clamp(gazeShift * 5.8, 0, 1);
+  const centered = Math.max(
+    0,
+    1 - (Math.abs(centerX - canvas.width / 2) / (canvas.width / 2)) * 0.85 - (Math.abs(centerY - canvas.height / 2) / (canvas.height / 2)) * 0.5,
+  );
+  const drift = Math.min(
+    isBlinking
+      ? 0
+      : Math.abs(gazeBias) * 0.48
+        + eyeMotion * 0.68,
+    1,
+  );
+
+  if (!isBlinking) {
+    state.lastGazeBias = gazeBias;
+    state.lastEyeMid = { x: eyeMid.x, y: eyeMid.y };
+  }
+  state.lastFaceCenter = faceCenter;
+
+  return {
+    faceDetected: true,
+    faceDetectorActive: true,
+    trackingMode: "mediapipe",
+    centered,
+    eye: Math.max(0, Math.min(1 - drift * 0.75, 1)),
+    drift,
+    focusX: eyeMid.x * canvas.width,
+    focusY: eyeMid.y * canvas.height,
+    boxWidth: Math.max(boxWidth, canvas.width * 0.24),
+    boxHeight: Math.max(boxHeight, canvas.height * 0.34),
+    horizontalBias: gazeBias,
+    gazeBias,
+    eyeMotion,
+    blinkRatio,
+    isBlinking,
+    headShift,
+  };
+}
+
+function averagePoints(landmarks, indexes) {
+  const points = indexes
+    .map((index) => landmarks[index])
+    .filter(Boolean);
+  if (!points.length) return { x: 0.5, y: 0.45 };
+  const total = points.reduce((sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }), { x: 0, y: 0 });
+  return { x: total.x / points.length, y: total.y / points.length };
+}
+
+function eyeRatio(start, end, iris) {
+  if (!start || !end || !iris) return 0;
+  const span = end.x - start.x;
+  if (!Number.isFinite(span) || Math.abs(span) < 0.0001) return 0;
+  return clamp(((iris.x - start.x) / span - 0.5) * 2, -1, 1);
+}
+
+function eyeOpenRatio(upper, lower, outer, inner) {
+  if (!upper || !lower || !outer || !inner) return 0.3;
+  const width = Math.hypot(inner.x - outer.x, inner.y - outer.y);
+  if (!Number.isFinite(width) || width < 0.0001) return 0.3;
+  const height = Math.hypot(lower.x - upper.x, lower.y - upper.y);
+  return height / width;
+}
+
+function detectMediaPipeSample() {
+  if (!state.faceLandmarker) return null;
+
+  try {
+    const result = state.faceLandmarker.detectForVideo(camera, performance.now());
+    const landmarks = result.faceLandmarks?.[0];
+    if (!landmarks?.length) {
+      return { faceDetected: false, faceDetectorActive: true, trackingMode: "mediapipe" };
+    }
+
+    return sampleFromLandmarks(landmarks);
+  } catch (error) {
+    state.faceLandmarker = null;
+    state.faceLandmarkerReady = false;
+    state.faceLandmarkerError = String(error?.message || error || "MediaPipe detect failed");
+    return null;
+  }
+}
+
+function getFaceDetector() {
+  if (!("FaceDetector" in window)) return null;
+  if (!state.faceDetector) {
+    state.faceDetector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
+  }
+  return state.faceDetector;
+}
+
+function eyeMovementScore(sample) {
+  if (sample.faceDetectorActive && !sample.faceDetected) return 0.2;
+  return 1 - effectiveEyeLevel(sample);
+}
+
+function headMovementLabel(sample) {
+  const level = headMovementScore(sample);
+  if (sample.faceDetectorActive && !sample.faceDetected) return "searching";
+  if (level > 0.42) return "head shifting";
+  if (level > 0.18) return "slight move";
+  return "steady";
+}
+
+function headMovementScore(sample) {
+  if (sample.faceDetectorActive && !sample.faceDetected) return 0.2;
+  if (sample.trackingMode === "mediapipe") {
+    return clamp((sample.headShift ?? 0) * 18 + (1 - (sample.centered ?? 1)) * 0.45, 0, 1);
+  }
+  return Math.max(0, Math.min(sample.movement * 2, 1));
+}
+
+function volumeLabel(db) {
+  if (db > -18) return "strong";
+  if (db > -26) return "clear";
+  if (db > -34) return "soft";
+  return "too quiet";
+}
+
+function volumeScore(db) {
+  if (db > -18) return 0.9;
+  if (db > -26) return 0.72;
+  if (db > -34) return 0.48;
+  return 0.24;
+}
+
+function energyLabel(sample) {
+  if (!sample.voiced) return "waiting";
+  if (sample.peak > 0.2) return "animated";
+  if (sample.peak > 0.1) return "steady";
+  return "flat";
+}
+
+function energyScore(sample) {
+  if (!sample.voiced) return 0.4;
+  if (sample.peak > 0.2) return 0.9;
+  if (sample.peak > 0.1) return 0.66;
+  return 0.34;
+}
+
+function pitchLabel(sample) {
+  if (!sample.pitchHz) return "listening";
+  if (sample.pitchDelta > 28) return "varied";
+  if (sample.pitchDelta > 12) return "moderate";
+  return "narrow";
+}
+
+function pitchScore(sample) {
+  if (!sample.pitchHz) return 0.4;
+  if (sample.pitchDelta > 28) return 0.88;
+  if (sample.pitchDelta > 12) return 0.62;
+  return 0.32;
+}
+
+function pauseLabel(sample) {
+  if (sample.voiced) {
+    if (sample.pauseMs > 1100) return "long gap";
+    if (sample.pauseMs > 420) return "spaced";
+    return "tight";
+  }
+  const silenceFor = state.lastSpeechAt ? performance.now() - state.lastSpeechAt : 0;
+  if (silenceFor > 1100) return "holding";
+  if (silenceFor > 420) return "pause";
+  return "brief";
+}
+
+function pauseScore(sample) {
+  if (sample.pauseMs > 1100) return 0.3;
+  if (sample.pauseMs > 420) return 0.84;
+  if (sample.voiced) return 0.46;
+  return 0.58;
+}
+
+function audioFeedbackText(sample) {
+  if (!sample.voiced) {
+    const silenceFor = state.lastSpeechAt ? performance.now() - state.lastSpeechAt : 0;
+    if (silenceFor > 1100) return "Long pause detected. This can work before a key point, but too many will break momentum.";
+    if (silenceFor > 420) return "Healthy pause. Let the next line land cleanly.";
+    return "Mic is live. Start speaking to analyze pace, volume, pitch range, and pauses.";
+  }
+  if (sample.db < -34) return "Volume is low right now. Push a little more air through the next sentence.";
+  if (sample.pitchDelta < 10) return "Pitch range is narrow. Add more rise and fall so the idea sounds alive.";
+  if (sample.peak > 0.22) return "Vocal energy is strong. Keep that lift on your important phrases.";
+  return "Real audio analysis is active: volume, energy, pitch range, and pauses are all being measured live.";
+}
+
+function detectPitch(buffer, sampleRate) {
+  let bestOffset = -1;
+  let bestCorrelation = 0;
+  const minSamples = Math.floor(sampleRate / 300);
+  const maxSamples = Math.floor(sampleRate / 85);
+  for (let offset = minSamples; offset <= maxSamples; offset += 1) {
+    let correlation = 0;
+    for (let index = 0; index < buffer.length - offset; index += 1) {
+      correlation += buffer[index] * buffer[index + offset];
+    }
+    if (correlation > bestCorrelation) {
+      bestCorrelation = correlation;
+      bestOffset = offset;
+    }
+  }
+  if (bestOffset === -1 || bestCorrelation < 6) return 0;
+  return sampleRate / bestOffset;
+}
+
+function facePositionLabel(sample) {
+  if (sample.faceDetectorActive && !sample.faceDetected) return "searching";
+  if (sample.centered > 0.72) return "centered";
+  if (sample.centered > 0.48) return "slightly off";
+  return "off center";
+}
+
+function speechErrorLabel(error) {
+  if (error === "not-allowed") return "Mic blocked";
+  if (error === "service-not-allowed") return "Speech unavailable";
+  if (error === "audio-capture") return "Mic unavailable";
+  if (error === "no-speech") return "No speech heard";
+  if (error === "network") return "Speech network error";
+  if (error === "aborted") return "Speech stopped";
+  return "Speech paused";
+}
+
+function speechErrorMessage(error) {
+  if (error === "not-allowed") {
+    return "Microphone access is blocked. Allow mic access for this site, then start again in Chrome on http://localhost:3000.";
+  }
+  if (error === "service-not-allowed") {
+    return "This browser window is not allowing live speech recognition even if microphone permission is on. Open http://localhost:3000 in Chrome and run live transcript there, or use the upload transcript path below.";
+  }
+  if (error === "audio-capture") {
+    return "No working microphone was found. Check your system input device, then retry.";
+  }
+  if (error === "no-speech") {
+    return "The browser started listening but did not hear speech. Try speaking a bit louder or select a different microphone.";
+  }
+  if (error === "network") {
+    return "Browser speech recognition hit a network error. Retry once, or use the upload transcript path below.";
+  }
+  if (error === "aborted") {
+    return "Speech recognition stopped before any transcript arrived. Start again and speak after the status changes to Listening.";
+  }
+  return "Speech recognition paused before any transcript arrived. Open this app in Chrome on http://localhost:3000 and allow microphone access.";
+}
+
 function renderList(target, rows) {
   target.innerHTML = "";
   rows.forEach(({ label, value, score }) => {
@@ -607,8 +1359,7 @@ function renderList(target, rows) {
 }
 
 function say(message, expression) {
-  coachMessage.textContent = message;
-  avatar.className = `avatar ${expression}`;
+  updateCoach(message, expression);
 
   if (!("speechSynthesis" in window)) return;
 
@@ -620,6 +1371,11 @@ function say(message, expression) {
     if (avatar.classList.contains("speaking")) avatar.className = "avatar listening";
   };
   window.speechSynthesis.speak(utterance);
+}
+
+function updateCoach(message, expression) {
+  coachMessage.textContent = message;
+  avatar.className = `avatar ${expression}`;
 }
 
 function resetDashboard() {

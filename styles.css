@@ -134,7 +134,8 @@ h2 {
 }
 
 #camera,
-#visionCanvas {
+#visionCanvas,
+#trackingOverlay {
   height: 100%;
   inset: 0;
   object-fit: cover;
@@ -144,6 +145,10 @@ h2 {
 
 #visionCanvas {
   display: none;
+}
+
+#trackingOverlay {
+  pointer-events: none;
 }
 
 .camera-overlay {
@@ -334,9 +339,26 @@ h2 {
   padding-bottom: 10px;
 }
 
+.signal-row {
+  align-items: flex-start;
+}
+
+.signal-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
 .signal-list span,
 .dashboard span {
   color: var(--muted);
+}
+
+.signal-feedback {
+  color: var(--ink);
+  font-size: 0.88rem;
+  line-height: 1.35;
+  margin: 6px 0 0;
+  max-width: 24ch;
 }
 
 .dashboard ul {
