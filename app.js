@@ -20,6 +20,12 @@ const eyeSignal = document.querySelector("#eyeSignal");
 const positionSignal = document.querySelector("#positionSignal");
 const lightingSignal = document.querySelector("#lightingSignal");
 const movementSignal = document.querySelector("#movementSignal");
+const uploadFile = document.querySelector("#uploadFile");
+const uploadStatus = document.querySelector("#uploadStatus");
+const uploadTranscript = document.querySelector("#uploadTranscript");
+const analyzeUploadBtn = document.querySelector("#analyzeUploadBtn");
+const clearUploadBtn = document.querySelector("#clearUploadBtn");
+const mediaPreview = document.querySelector("#mediaPreview");
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -34,6 +40,9 @@ const state = {
   interim: "",
   samples: [],
   lastFrame: null,
+  uploadUrl: "",
+  uploadDuration: 60,
+  uploadMedia: null,
 };
 
 const audienceCopy = {
@@ -63,6 +72,10 @@ document.querySelectorAll(".mode").forEach((button) => {
 startBtn.addEventListener("click", startSession);
 stopBtn.addEventListener("click", stopSession);
 retryBtn.addEventListener("click", resetSession);
+uploadFile.addEventListener("change", handleUploadFile);
+uploadTranscript.addEventListener("input", syncUploadControls);
+analyzeUploadBtn.addEventListener("click", analyzeUpload);
+clearUploadBtn.addEventListener("click", clearUpload);
 
 async function startSession() {
   resetDashboard();
@@ -237,6 +250,8 @@ function setMetric(element, text, score) {
 }
 
 function stopSession() {
+  const wasRunning = stopBtn.disabled === false;
+
   if (state.interim.trim()) {
     state.transcript = `${state.transcript} ${state.interim}`.trim();
     state.interim = "";
@@ -256,11 +271,11 @@ function stopSession() {
 
   window.clearInterval(state.timerId);
   cancelAnimationFrame(state.visionId);
-  showFeedback();
+  if (wasRunning) showFeedback();
 }
 
 function resetSession() {
-  stopSession();
+  if (stopBtn.disabled === false) stopSession();
   state.transcript = "";
   state.interim = "";
   state.samples = [];
@@ -294,37 +309,224 @@ function maybeInterrupt() {
   }
 }
 
-function showFeedback() {
-  const elapsed = Math.max(getElapsedSeconds(), 1);
-  const transcript = `${state.transcript} ${state.interim}`.trim() || samplePitch();
+async function showFeedback(source = {}) {
+  const elapsed = Math.max(source.durationSeconds || getElapsedSeconds(), 1);
+  const transcript = source.transcript || `${state.transcript} ${state.interim}`.trim() || samplePitch();
   const words = transcript.match(/\b[\w'-]+\b/g) || [];
   const fillers = countFillers(transcript);
   const wpm = Math.round((words.length / elapsed) * 60);
-  const visual = summarizeVision();
+  const visual = source.visual || summarizeVision();
   const scores = scoreContent(transcript);
+  const fallback = buildLocalFeedback({ fillers, scores, transcript, visual, wpm });
+  const feedback = await requestCoachFeedback({
+    audience: state.mode,
+    transcript,
+    durationSeconds: elapsed,
+    delivery: {
+      wordsPerMinute: wpm,
+      fillerWords: fillers.total,
+    },
+    visual,
+  }, fallback);
 
-  renderList(deliveryList, [
-    ["Speaking pace", paceLabel(wpm), paceScore(wpm)],
-    ["Eye contact", visual.eye, visual.eyeScore],
-    ["Filler words", `${fillers.total}`, fillers.total <= 4 ? 0.9 : fillers.total <= 9 ? 0.55 : 0.25],
-    ["Pauses", wpm > 165 ? "too few" : "workable", wpm > 165 ? 0.35 : 0.75],
-    ["Energy", visual.movement, visual.movementScore],
-  ]);
-
-  renderList(contentList, [
-    ["Clear problem", `${scores.problem}/10`, scores.problem / 10],
-    ["Specific user", `${scores.user}/10`, scores.user / 10],
-    ["Demo clarity", `${scores.demo}/10`, scores.demo / 10],
-    ["Impact", `${scores.impact}/10`, scores.impact / 10],
-    ["Call to action", scores.cta > 5 ? `${scores.cta}/10` : "missing", scores.cta / 10],
-  ]);
-
-  rewriteText.textContent = buildRewrite(transcript, scores);
-  followupText.textContent = audienceCopy[state.mode].followup;
+  renderList(deliveryList, feedback.delivery);
+  renderList(contentList, feedback.content);
+  rewriteText.textContent = feedback.suggestedRewrite;
+  followupText.textContent = feedback.followupQuestion;
   dashboard.classList.remove("hidden");
+  say(feedback.coachResponse, feedback.coachResponse.startsWith("Pause") ? "confused" : "speaking");
+}
 
-  const spoken = buildSpokenFeedback(wpm, fillers.total, scores, visual);
-  say(spoken, scores.problem < 6 || scores.user < 6 ? "confused" : "speaking");
+async function requestCoachFeedback(payload, fallback) {
+  try {
+    const response = await fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) throw new Error(`Feedback API returned ${response.status}`);
+    return normalizeFeedback(await response.json(), fallback);
+  } catch {
+    return fallback;
+  }
+}
+
+function buildLocalFeedback({ fillers, scores, transcript, visual, wpm }) {
+  return {
+    coachResponse: buildSpokenFeedback(wpm, fillers.total, scores, visual),
+    delivery: [
+      { label: "Speaking pace", value: paceLabel(wpm), score: paceScore(wpm) },
+      { label: "Eye contact", value: visual.eye, score: visual.eyeScore },
+      { label: "Filler words", value: `${fillers.total}`, score: fillers.total <= 4 ? 0.9 : fillers.total <= 9 ? 0.55 : 0.25 },
+      { label: "Pauses", value: wpm > 165 ? "too few" : "workable", score: wpm > 165 ? 0.35 : 0.75 },
+      { label: "Energy", value: visual.movement, score: visual.movementScore },
+    ],
+    content: [
+      { label: "Clear problem", value: `${scores.problem}/10`, score: scores.problem / 10 },
+      { label: "Specific user", value: `${scores.user}/10`, score: scores.user / 10 },
+      { label: "Demo clarity", value: `${scores.demo}/10`, score: scores.demo / 10 },
+      { label: "Impact", value: `${scores.impact}/10`, score: scores.impact / 10 },
+      { label: "Call to action", value: scores.cta > 5 ? `${scores.cta}/10` : "missing", score: scores.cta / 10 },
+    ],
+    suggestedRewrite: buildRewrite(transcript, scores),
+    followupQuestion: audienceCopy[state.mode].followup,
+  };
+}
+
+function normalizeFeedback(feedback, fallback) {
+  return {
+    coachResponse: feedback.coachResponse || fallback.coachResponse,
+    delivery: normalizeRows(feedback.delivery, fallback.delivery),
+    content: normalizeRows(feedback.content, fallback.content),
+    suggestedRewrite: feedback.suggestedRewrite || fallback.suggestedRewrite,
+    followupQuestion: feedback.followupQuestion || fallback.followupQuestion,
+  };
+}
+
+function normalizeRows(rows, fallbackRows) {
+  if (!Array.isArray(rows) || rows.length === 0) return fallbackRows;
+
+  return rows.map((row, index) => {
+    if (Array.isArray(row)) {
+      return { label: row[0], value: row[1], score: row[2] ?? fallbackRows[index]?.score ?? 0.5 };
+    }
+
+    return {
+      label: row.label || fallbackRows[index]?.label || "Metric",
+      value: row.value || fallbackRows[index]?.value || "--",
+      score: Number.isFinite(Number(row.score)) ? Number(row.score) : fallbackRows[index]?.score ?? 0.5,
+    };
+  });
+}
+
+function handleUploadFile() {
+  const file = uploadFile.files?.[0];
+  clearUploadPreview();
+  resetDashboard();
+
+  if (!file) {
+    syncUploadControls();
+    return;
+  }
+
+  uploadStatus.textContent = file.name;
+  clearUploadBtn.disabled = false;
+
+  if (isTextFile(file)) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      uploadTranscript.value = cleanTranscriptFile(String(reader.result || ""));
+      transcriptEl.textContent = uploadTranscript.value || "Transcript loaded.";
+      speechStatus.textContent = "Upload transcript";
+      state.uploadDuration = estimateDurationFromTranscript(uploadTranscript.value);
+      syncUploadControls();
+      say("Transcript loaded. I can analyze this like a practice round.", "listening");
+    };
+    reader.readAsText(file);
+    return;
+  }
+
+  if (file.type.startsWith("video/") || file.type.startsWith("audio/")) {
+    state.uploadUrl = URL.createObjectURL(file);
+    const media = document.createElement(file.type.startsWith("video/") ? "video" : "audio");
+    media.controls = true;
+    media.src = state.uploadUrl;
+    mediaPreview.appendChild(media);
+    mediaPreview.classList.remove("hidden");
+    state.uploadMedia = media;
+    media.addEventListener("loadedmetadata", () => {
+      state.uploadDuration = Number.isFinite(media.duration) ? Math.max(Math.round(media.duration), 1) : 60;
+      syncUploadControls();
+    });
+    speechStatus.textContent = "Upload media";
+    syncUploadControls();
+    say("Media loaded. Add the transcript, then I will give feedback on the pitch.", "listening");
+  }
+}
+
+function analyzeUpload() {
+  const transcript = uploadTranscript.value.trim();
+
+  if (!transcript) {
+    say("I need a transcript for content feedback. Paste the words from the pitch, then analyze again.", "confused");
+    uploadTranscript.focus();
+    return;
+  }
+
+  state.transcript = transcript;
+  state.interim = "";
+  transcriptEl.textContent = transcript;
+  speechStatus.textContent = "Upload analyzed";
+
+  const visual = summarizeUploadVisual();
+  showFeedback({
+    transcript,
+    durationSeconds: state.uploadDuration || estimateDurationFromTranscript(transcript),
+    visual,
+  });
+}
+
+function summarizeUploadVisual() {
+  const media = state.uploadMedia;
+  if (!media || media.tagName !== "VIDEO" || media.readyState < 2) {
+    return { eye: "not measured", eyeScore: 0.45, movement: "not measured", movementScore: 0.45 };
+  }
+
+  try {
+    ctx.drawImage(media, 0, 0, canvas.width, canvas.height);
+    const sample = analyzeFrame(ctx.getImageData(0, 0, canvas.width, canvas.height));
+    return {
+      eye: sample.eye > 0.7 ? "consistent" : sample.eye > 0.48 ? "inconsistent" : "drifting down or away",
+      eyeScore: sample.eye,
+      movement: "single-frame sample",
+      movementScore: Math.max(sample.movement, 0.45),
+    };
+  } catch {
+    return { eye: "not measured", eyeScore: 0.45, movement: "not measured", movementScore: 0.45 };
+  }
+}
+
+function clearUpload() {
+  uploadFile.value = "";
+  uploadTranscript.value = "";
+  uploadStatus.textContent = "No file";
+  state.uploadDuration = 60;
+  clearUploadPreview();
+  syncUploadControls();
+}
+
+function clearUploadPreview() {
+  if (state.uploadUrl) URL.revokeObjectURL(state.uploadUrl);
+  state.uploadUrl = "";
+  state.uploadMedia = null;
+  mediaPreview.innerHTML = "";
+  mediaPreview.classList.add("hidden");
+}
+
+function syncUploadControls() {
+  const hasFile = Boolean(uploadFile.files?.[0]);
+  const hasTranscript = Boolean(uploadTranscript.value.trim());
+  analyzeUploadBtn.disabled = !hasFile && !hasTranscript;
+  clearUploadBtn.disabled = !hasFile && !hasTranscript;
+}
+
+function isTextFile(file) {
+  return file.type.startsWith("text/") || /\.(txt|md|vtt|srt)$/i.test(file.name);
+}
+
+function cleanTranscriptFile(value) {
+  return value
+    .replace(/WEBVTT/gi, "")
+    .replace(/\d{1,2}:\d{2}:\d{2}[,.]\d{3}\s+-->\s+\d{1,2}:\d{2}:\d{2}[,.]\d{3}/g, "")
+    .replace(/^\d+$/gm, "")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+}
+
+function estimateDurationFromTranscript(transcript) {
+  const words = transcript.match(/\b[\w'-]+\b/g) || [];
+  return Math.max(Math.round((words.length / 145) * 60), 20);
 }
 
 function summarizeVision() {
@@ -397,7 +599,7 @@ function countFillers(transcript) {
 
 function renderList(target, rows) {
   target.innerHTML = "";
-  rows.forEach(([label, value, score]) => {
+  rows.forEach(({ label, value, score }) => {
     const item = document.createElement("li");
     item.innerHTML = `<span>${label}</span><strong class="${score > 0.66 ? "good" : score > 0.4 ? "warn" : "bad"}">${value}</strong>`;
     target.appendChild(item);

@@ -86,6 +86,22 @@
           </article>
         </section>
 
+        <section class="upload-grid">
+          <article class="panel upload-panel">
+            <div class="panel-heading">
+              <h2>Upload Practice</h2>
+              <span id="uploadStatus">No file</span>
+            </div>
+            <div class="upload-controls">
+              <input id="uploadFile" type="file" accept=".txt,.md,.vtt,.srt,audio/*,video/*">
+              <button id="analyzeUploadBtn" class="primary" disabled>Analyze upload</button>
+              <button id="clearUploadBtn" disabled>Clear</button>
+            </div>
+            <textarea id="uploadTranscript" rows="6" placeholder="Paste or edit transcript"></textarea>
+            <div id="mediaPreview" class="media-preview hidden"></div>
+          </article>
+        </section>
+
         <section id="dashboard" class="dashboard hidden" aria-label="Feedback dashboard">
           <div class="panel delivery">
             <h2>Delivery</h2>

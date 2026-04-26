@@ -95,16 +95,18 @@ PitchCoach combines all three modalities for truly comprehensive feedback.
 ### Prerequisites
 - A modern Chromium-based browser for the best speech recognition support
 - Webcam and microphone permissions
-- Python 3.11+ or any static file server for localhost
+- Node.js 18+ and npm
 
 ### Quick Start
 ```bash
 # From the project folder
-py -m http.server 8000
+npm run dev
 
 # Open in your browser
-http://localhost:8000
+http://localhost:3000
 ```
+
+No `npm install` is required for the current dependency-free server.
 
 ### Current MVP
 - Browser speech recognition for live transcript capture
@@ -112,6 +114,28 @@ http://localhost:8000
 - Webcam-based visual heuristics for camera presence, lighting, and movement
 - Deterministic pitch scoring for pace, filler words, problem clarity, user specificity, demo clarity, impact, and call to action
 - Audience modes for hackathon judge, technical interviewer, and investor
+- Upload support for transcript, caption, audio, and video practice files
+
+### LLM Feedback Integration Point
+The browser now has two input paths:
+- Live practice captures transcript, duration, and visual signals.
+- Upload practice accepts a transcript/caption file, or media plus a pasted transcript.
+
+Both paths send the same normalized payload to `POST /api/feedback`. Keep the LLM API key on the backend, not in `app.js`.
+
+To connect an LLM provider, create `.env` from `.env.example`:
+```bash
+cp .env.example .env
+```
+
+Then set:
+```bash
+LLM_API_URL=your_chat_completions_compatible_endpoint
+LLM_API_KEY=your_key
+LLM_MODEL=your_model
+```
+
+If those values are missing, the server returns local fallback feedback so the demo still works.
 
 ## Usage Examples
 
@@ -174,4 +198,3 @@ MIT License - see LICENSE file for details.
 ## Contact
 
 For questions or feedback, reach out to the maintainers or open an issue on GitHub.
-
