@@ -59,7 +59,10 @@
             <canvas id="trackingOverlay" width="320" height="180" aria-hidden="true"></canvas>
             <div class="camera-overlay">
               <span id="cameraStatus">Camera off</span>
-              <span id="timer">00:00</span>
+              <div class="camera-tools">
+                <button id="trackingToggle" class="icon-toggle active" type="button" aria-pressed="true" title="Show face tracking overlay">Face box</button>
+                <span id="timer">00:00</span>
+              </div>
             </div>
           </div>
 
@@ -177,6 +180,44 @@
             <h2>Follow-up Question</h2>
             <p id="followupText"></p>
           </div>
+        </section>
+
+        <section id="reviewPanel" class="panel review-panel hidden" aria-label="Recording review">
+          <div class="panel-heading">
+            <h2>Recording Review</h2>
+            <span id="recordingStatus">No recording</span>
+          </div>
+          <div class="review-body">
+            <div class="recording-frame">
+              <video id="recordingPlayback" controls playsinline></video>
+              <aside id="momentDetail" class="moment-detail hidden">
+                <span id="timelineStatus">Waiting</span>
+                <strong id="momentTitle"></strong>
+                <p id="momentText"></p>
+              </aside>
+            </div>
+            <div class="review-marker-shell">
+              <div id="eventTimeline" class="event-timeline" aria-label="Timed feedback markers"></div>
+            </div>
+            <div class="marker-legend" aria-label="Marker color legend">
+              <span class="eye">Eye</span>
+              <span class="wording">Wording</span>
+              <span class="audio">Audio</span>
+              <span class="posture">Posture</span>
+            </div>
+          </div>
+        </section>
+
+        <section id="chatPanel" class="panel chat-panel hidden" aria-label="Feedback follow-up chat">
+          <div class="panel-heading">
+            <h2>Ask About Feedback</h2>
+            <span id="chatStatus">Ready after feedback</span>
+          </div>
+          <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
+          <form id="chatForm" class="chat-form">
+            <input id="chatInput" type="text" placeholder="Ask Gemini how to improve this feedback..." disabled>
+            <button id="chatSendBtn" class="primary" type="submit" disabled>Ask</button>
+          </form>
         </section>
       </section>
     </main>

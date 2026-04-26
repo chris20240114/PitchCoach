@@ -32,6 +32,16 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/chat") {
+      await handleChat(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/video-feedback") {
+      await handleVideoFeedback(request, response);
+      return;
+    }
+
     if (request.method !== "GET" && request.method !== "HEAD") {
       sendJson(response, 405, { error: "Method not allowed" });
       return;
@@ -110,6 +120,41 @@ async function handleFeedback(request, response) {
   }
 }
 
+async function handleChat(request, response) {
+  const payload = await readJsonBody(request);
+  const fallback = buildFallbackChat(payload);
+
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      sendJson(response, 200, { answer: fallback, source: "local" });
+      return;
+    }
+
+    const answer = await requestGeminiChat(payload);
+    sendJson(response, 200, { answer, source: "gemini" });
+  } catch (error) {
+    console.error("Gemini chat failed:", error);
+    sendJson(response, 200, { answer: fallback, source: "local", warning: "Gemini unavailable; used local fallback." });
+  }
+}
+
+async function handleVideoFeedback(request, response) {
+  const payload = await readJsonBody(request);
+
+  try {
+    if (!process.env.GEMINI_API_KEY || !payload?.videoData) {
+      sendJson(response, 200, { performanceNotes: [], source: "local" });
+      return;
+    }
+
+    const performanceNotes = await requestGeminiVideoFeedback(payload);
+    sendJson(response, 200, { performanceNotes, source: "gemini" });
+  } catch (error) {
+    console.error("Gemini video feedback failed:", error);
+    sendJson(response, 200, { performanceNotes: [], source: "local", warning: "Gemini video unavailable." });
+  }
+}
+
 async function requestGeminiFeedback(payload) {
   const prompt = buildCoachPrompt(payload);
   const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
@@ -147,6 +192,84 @@ async function requestGeminiFeedback(payload) {
   }
 
   return JSON.parse(text);
+}
+
+async function requestGeminiChat(payload) {
+  const prompt = buildChatPrompt(payload);
+  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  const result = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": process.env.GEMINI_API_KEY,
+    },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: prompt }],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.45,
+        responseMimeType: "application/json",
+        responseSchema: geminiChatSchema,
+      },
+    }),
+  });
+
+  if (!result.ok) {
+    const body = await result.text();
+    throw new Error(`Gemini chat failed with ${result.status}: ${body}`);
+  }
+
+  const data = await result.json();
+  const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim();
+  if (!text) throw new Error("Gemini chat response did not include JSON text.");
+  return JSON.parse(text).answer;
+}
+
+async function requestGeminiVideoFeedback(payload) {
+  const prompt = buildVideoPrompt(payload);
+  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  const result = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": process.env.GEMINI_API_KEY,
+    },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: prompt },
+            {
+              inlineData: {
+                mimeType: payload.mimeType || "video/webm",
+                data: payload.videoData,
+              },
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.25,
+        responseMimeType: "application/json",
+        responseSchema: geminiVideoSchema,
+      },
+    }),
+  });
+
+  if (!result.ok) {
+    const body = await result.text();
+    throw new Error(`Gemini video request failed with ${result.status}: ${body}`);
+  }
+
+  const data = await result.json();
+  const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim();
+  if (!text) throw new Error("Gemini video response did not include JSON text.");
+  return normalizePerformanceNotes(JSON.parse(text).performanceNotes);
 }
 
 async function requestOpenAiFeedback(payload) {
@@ -208,6 +331,30 @@ function buildCoachPrompt(payload) {
   ].join("\n");
 }
 
+function buildChatPrompt(payload) {
+  return [
+    "You are PitchMirror, a practical live presentation coach.",
+    "Answer the user's follow-up question using the previous transcript, delivery metrics, visual observations, timeline moments, and feedback.",
+    "Be specific and concise. Do not invent emotional diagnoses. Refer only to observable behavior and wording.",
+    "Return JSON with one field: answer.",
+    "",
+    JSON.stringify(payload, null, 2),
+  ].join("\n");
+}
+
+function buildVideoPrompt(payload) {
+  return [
+    "You are reviewing a practice presentation video for observable delivery moments.",
+    "Find up to 6 timestamped moments that a speaker should review.",
+    "Use only observable cues: face visibility, gaze direction, head movement, posture, gestures, volume/energy if audible, and any obvious confusing wording from the provided context.",
+    "Do not infer anxiety, confidence, truthfulness, political beliefs, personality, or protected traits.",
+    "Return JSON with performanceNotes. Each note needs time in seconds, type, label, and detail.",
+    "Allowed type values: eye, audio, pause, posture, wording.",
+    "",
+    JSON.stringify(payload.context || {}, null, 2),
+  ].join("\n");
+}
+
 const metricSchema = {
   type: "object",
   additionalProperties: false,
@@ -217,6 +364,18 @@ const metricSchema = {
     score: { type: "number", minimum: 0, maximum: 1 },
   },
   required: ["label", "value", "score"],
+};
+
+const performanceNoteSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    time: { type: "number" },
+    type: { type: "string", enum: ["eye", "audio", "pause", "posture", "wording"] },
+    label: { type: "string" },
+    detail: { type: "string" },
+  },
+  required: ["time", "type", "label", "detail"],
 };
 
 const feedbackSchema = {
@@ -239,8 +398,14 @@ const feedbackSchema = {
     },
     suggestedRewrite: { type: "string" },
     followupQuestion: { type: "string" },
+    performanceNotes: {
+      type: "array",
+      items: performanceNoteSchema,
+      minItems: 0,
+      maxItems: 8,
+    },
   },
-  required: ["coachResponse", "avatarState", "delivery", "content", "suggestedRewrite", "followupQuestion"],
+  required: ["coachResponse", "avatarState", "delivery", "content", "suggestedRewrite", "followupQuestion", "performanceNotes"],
 };
 
 const geminiMetricSchema = {
@@ -252,6 +417,18 @@ const geminiMetricSchema = {
   },
   required: ["label", "value", "score"],
   propertyOrdering: ["label", "value", "score"],
+};
+
+const geminiPerformanceNoteSchema = {
+  type: "OBJECT",
+  properties: {
+    time: { type: "NUMBER" },
+    type: { type: "STRING", enum: ["eye", "audio", "pause", "posture", "wording"] },
+    label: { type: "STRING" },
+    detail: { type: "STRING" },
+  },
+  required: ["time", "type", "label", "detail"],
+  propertyOrdering: ["time", "type", "label", "detail"],
 };
 
 const geminiFeedbackSchema = {
@@ -273,9 +450,38 @@ const geminiFeedbackSchema = {
     },
     suggestedRewrite: { type: "STRING" },
     followupQuestion: { type: "STRING" },
+    performanceNotes: {
+      type: "ARRAY",
+      minItems: 0,
+      maxItems: 8,
+      items: geminiPerformanceNoteSchema,
+    },
   },
-  required: ["coachResponse", "avatarState", "delivery", "content", "suggestedRewrite", "followupQuestion"],
-  propertyOrdering: ["coachResponse", "avatarState", "delivery", "content", "suggestedRewrite", "followupQuestion"],
+  required: ["coachResponse", "avatarState", "delivery", "content", "suggestedRewrite", "followupQuestion", "performanceNotes"],
+  propertyOrdering: ["coachResponse", "avatarState", "delivery", "content", "suggestedRewrite", "followupQuestion", "performanceNotes"],
+};
+
+const geminiChatSchema = {
+  type: "OBJECT",
+  properties: {
+    answer: { type: "STRING" },
+  },
+  required: ["answer"],
+  propertyOrdering: ["answer"],
+};
+
+const geminiVideoSchema = {
+  type: "OBJECT",
+  properties: {
+    performanceNotes: {
+      type: "ARRAY",
+      minItems: 0,
+      maxItems: 6,
+      items: geminiPerformanceNoteSchema,
+    },
+  },
+  required: ["performanceNotes"],
+  propertyOrdering: ["performanceNotes"],
 };
 
 function extractResponseText(data) {
@@ -316,7 +522,54 @@ function buildFallbackFeedback(payload) {
     ],
     suggestedRewrite: buildRewrite(scores),
     followupQuestion: followupFor(payload?.context || {}),
+    performanceNotes: buildFallbackPerformanceNotes(scores, visual, wpm, fillers.total),
   };
+}
+
+function buildFallbackChat(payload) {
+  const question = String(payload?.question || "").toLowerCase();
+  const context = payload?.context || {};
+  const feedback = context.feedback || {};
+
+  if (question.includes("rewrite") || question.includes("better version")) {
+    return feedback.suggestedRewrite || "Start with the audience problem, then give one concrete example and end with a clear next step.";
+  }
+
+  if (question.includes("eye") || question.includes("camera")) {
+    return "Use the recording timeline to find the eye-contact markers. Practice saying your strongest sentence while looking directly into the lens, then glance away only between thoughts.";
+  }
+
+  if (question.includes("pace") || question.includes("fast") || question.includes("slow")) {
+    return "Mark one pause after the problem sentence and one before the closing ask. Those two pauses usually make the whole delivery feel more controlled.";
+  }
+
+  return feedback.coachResponse || "Pick one improvement first: clarify the audience problem, add a concrete example, or strengthen the closing ask.";
+}
+
+function buildFallbackPerformanceNotes(scores, visual, wpm, fillerCount) {
+  const notes = [];
+  if (scores.problem < 6) notes.push({ time: 5, type: "wording", label: "Problem clarity", detail: "The opening needs a clearer audience problem before the solution." });
+  if (Number(visual.eyeScore || 0) < 0.55) notes.push({ time: 12, type: "eye", label: "Eye contact", detail: "Review this section for camera drift and re-lock on the lens." });
+  if (wpm > 170) notes.push({ time: 18, type: "audio", label: "Pacing", detail: "This section may feel rushed. Add a pause after the main point." });
+  if (fillerCount > 6) notes.push({ time: 24, type: "wording", label: "Filler words", detail: "Replace filler words with a short pause before continuing." });
+  return notes;
+}
+
+function normalizePerformanceNotes(notes = []) {
+  if (!Array.isArray(notes)) return [];
+  return notes.slice(0, 8).map((note) => ({
+    time: Number.isFinite(Number(note.time)) ? Number(note.time) : Number(note.second || 0),
+    type: normalizeNoteType(note.type),
+    label: String(note.label || "Review moment"),
+    detail: String(note.detail || note.value || ""),
+  }));
+}
+
+function normalizeNoteType(type = "wording") {
+  if (["eye", "audio", "pause", "posture", "wording"].includes(type)) return type;
+  if (["volume", "pitch", "energy"].includes(type)) return "audio";
+  if (["gesture", "movement", "head"].includes(type)) return "posture";
+  return "wording";
 }
 
 function scoreContent(transcript) {

@@ -38,6 +38,21 @@ const uploadTranscript = document.querySelector("#uploadTranscript");
 const analyzeUploadBtn = document.querySelector("#analyzeUploadBtn");
 const clearUploadBtn = document.querySelector("#clearUploadBtn");
 const mediaPreview = document.querySelector("#mediaPreview");
+const trackingToggle = document.querySelector("#trackingToggle");
+const reviewPanel = document.querySelector("#reviewPanel");
+const recordingStatus = document.querySelector("#recordingStatus");
+const recordingPlayback = document.querySelector("#recordingPlayback");
+const timelineStatus = document.querySelector("#timelineStatus");
+const eventTimeline = document.querySelector("#eventTimeline");
+const momentDetail = document.querySelector("#momentDetail");
+const momentTitle = document.querySelector("#momentTitle");
+const momentText = document.querySelector("#momentText");
+const chatPanel = document.querySelector("#chatPanel");
+const chatStatus = document.querySelector("#chatStatus");
+const chatMessages = document.querySelector("#chatMessages");
+const chatForm = document.querySelector("#chatForm");
+const chatInput = document.querySelector("#chatInput");
+const chatSendBtn = document.querySelector("#chatSendBtn");
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const MEDIAPIPE_VISION_BUNDLE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
@@ -61,12 +76,22 @@ const state = {
   timerId: null,
   visionId: null,
   audioId: null,
+  overlayVisible: true,
+  recorder: null,
+  recordingChunks: [],
+  recordingBlob: null,
+  recordingUrl: "",
   transcript: "",
   interim: "",
   samples: [],
   audioSamples: [],
   transcriptEvents: [],
   liveEvents: [],
+  timelineEvents: [],
+  transcriptSegments: [],
+  eventCooldowns: {},
+  lastFeedbackContext: null,
+  chatHistory: [],
   interruption: {
     lastAtSeconds: -999,
     offTrackHits: 0,
@@ -93,6 +118,7 @@ const state = {
   uploadUrl: "",
   uploadDuration: 60,
   uploadMedia: null,
+  uploadFileBlob: null,
 };
 
 startBtn.addEventListener("click", startSession);
@@ -105,6 +131,8 @@ uploadFile.addEventListener("change", handleUploadFile);
 uploadTranscript.addEventListener("input", syncUploadControls);
 analyzeUploadBtn.addEventListener("click", analyzeUpload);
 clearUploadBtn.addEventListener("click", clearUpload);
+trackingToggle.addEventListener("click", toggleTrackingOverlay);
+chatForm.addEventListener("submit", handleChatSubmit);
 
 async function startSession() {
   resetDashboard();
@@ -115,6 +143,12 @@ async function startSession() {
   state.audioSamples = [];
   state.transcriptEvents = [];
   state.liveEvents = [];
+  state.timelineEvents = [];
+  state.transcriptSegments = [];
+  state.eventCooldowns = {};
+  state.recordingChunks = [];
+  clearRecordingReview();
+  resetFeedbackChat();
   resetInterruptionState();
   resetAudioTrackingState();
   state.startedAt = Date.now();
@@ -125,6 +159,7 @@ async function startSession() {
 
   await startCamera();
   initFaceLandmarker();
+  startRecording();
   startSpeech();
   startTimer();
   startVisionLoop();
@@ -179,6 +214,68 @@ async function startCamera() {
       cameraStatus.textContent = "Camera unavailable";
       addVisionSample({ lighting: 0, movement: 0, centered: 0, eye: 0 });
     }
+  }
+}
+
+function startRecording() {
+  if (!state.stream || !window.MediaRecorder) {
+    recordingStatus.textContent = "Recording unavailable";
+    addTimelineEvent("recording", 0, "Recording unavailable", "This browser could not start a local recording.");
+    return;
+  }
+
+  try {
+    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")
+      ? "video/webm;codecs=vp8,opus"
+      : "video/webm";
+    state.recordingChunks = [];
+    state.recorder = new MediaRecorder(state.stream, {
+      mimeType,
+      videoBitsPerSecond: 700000,
+      audioBitsPerSecond: 48000,
+    });
+    state.recorder.ondataavailable = (event) => {
+      if (event.data?.size) state.recordingChunks.push(event.data);
+    };
+    state.recorder.onstart = () => {
+      recordingStatus.textContent = "Recording";
+    };
+    state.recorder.onstop = finalizeRecording;
+    state.recorder.start(1000);
+  } catch {
+    state.recorder = null;
+    recordingStatus.textContent = "Recording unavailable";
+  }
+}
+
+function stopRecording() {
+  if (state.recorder?.state === "recording") {
+    state.recorder.stop();
+  } else {
+    finalizeRecording();
+  }
+}
+
+function finalizeRecording() {
+  if (!state.recordingChunks.length) return;
+  if (state.recordingUrl) URL.revokeObjectURL(state.recordingUrl);
+  state.recordingBlob = new Blob(state.recordingChunks, { type: state.recordingChunks[0]?.type || "video/webm" });
+  state.recordingUrl = URL.createObjectURL(state.recordingBlob);
+  recordingPlayback.src = state.recordingUrl;
+  recordingStatus.textContent = "Ready";
+  reviewPanel.classList.remove("hidden");
+  if (state.lastFeedbackContext) {
+    requestVideoPerformanceNotes({
+      transcript: state.lastFeedbackContext.transcript,
+      timeline: state.lastFeedbackContext.timeline,
+      feedback: state.lastFeedbackContext.feedback,
+      videoBlob: state.recordingBlob,
+    }).then((videoNotes) => {
+      if (!videoNotes.length) return;
+      const merged = mergeTimelineNotes(state.lastFeedbackContext.timeline, videoNotes);
+      state.lastFeedbackContext.timeline = merged;
+      renderTimeline(merged);
+    });
   }
 }
 
@@ -244,6 +341,7 @@ function startSpeech() {
 
     if (finalText) state.transcript += finalText;
     if (finalText) {
+      recordTranscriptSegment(finalText);
       state.transcriptEvents.push({
         atSeconds: getElapsedSeconds(),
         text: finalText.trim(),
@@ -400,6 +498,7 @@ function addVisionSample(sample) {
   const now = Date.now();
   Object.assign(sample, computeRecentEyeActivity(sample, now));
   state.samples.push({ ...sample, at: now, atSeconds: getElapsedSeconds() });
+  recordVisionEvent(sample);
   if (state.samples.length > 600) state.samples.shift();
 }
 
@@ -444,6 +543,7 @@ function analyzeAudioFrame(buffer, sampleRate) {
 
 function addAudioSample(sample) {
   state.audioSamples.push({ ...sample, at: Date.now() });
+  recordAudioEvent(sample);
   if (state.audioSamples.length > 600) state.audioSamples.shift();
 }
 
@@ -498,6 +598,7 @@ function stopSession() {
   window.clearInterval(state.timerId);
   cancelAnimationFrame(state.visionId);
   cancelAnimationFrame(state.audioId);
+  stopRecording();
   if (wasRunning) showFeedback();
 }
 
@@ -508,6 +609,9 @@ function resetSession() {
   state.listeningPausedForCoach = false;
   state.samples = [];
   state.audioSamples = [];
+  state.timelineEvents = [];
+  state.transcriptSegments = [];
+  state.eventCooldowns = {};
   state.lastFrame = null;
   state.lastGazeBias = 0;
   state.lastEyeMid = null;
@@ -532,6 +636,8 @@ function resetSession() {
   coachSignal.textContent = "waiting";
   coachSignal.className = "";
   clearTrackingOverlay();
+  clearRecordingReview();
+  resetFeedbackChat();
   resetDashboard();
   say("Ready when you are. Start with the person who has the problem.", "listening");
 }
@@ -677,7 +783,8 @@ function expectedTopicKeywords(type) {
 
 async function showFeedback(source = {}) {
   const elapsed = Math.max(source.durationSeconds || getElapsedSeconds(), 1);
-  const transcript = source.transcript || `${state.transcript} ${state.interim}`.trim() || samplePitch();
+  const rawTranscript = source.transcript ?? `${state.transcript} ${state.interim}`.trim();
+  const transcript = rawTranscript.trim() || (source.videoBlob ? "No transcript provided; review visual and audio delivery only." : samplePitch());
   const words = transcript.match(/\b[\w'-]+\b/g) || [];
   const fillers = countFillers(transcript);
   const wpm = Math.round((words.length / elapsed) * 60);
@@ -685,6 +792,7 @@ async function showFeedback(source = {}) {
   const audio = source.audio || summarizeAudio();
   const scores = scoreContent(transcript);
   const fallback = buildLocalFeedback({ audio, fillers, scores, transcript, visual, wpm });
+  const timeline = buildTimelineEvents();
   const feedback = await requestCoachFeedback({
     context: state.context,
     transcript,
@@ -696,6 +804,7 @@ async function showFeedback(source = {}) {
     visual,
     audio,
     timeline: buildSessionTimeline(transcript, elapsed, fillers, wpm, visual, audio),
+    performanceNotes: timeline,
   }, fallback);
 
   renderList(deliveryList, feedback.delivery);
@@ -703,6 +812,30 @@ async function showFeedback(source = {}) {
   rewriteText.textContent = feedback.suggestedRewrite;
   followupText.textContent = feedback.followupQuestion;
   dashboard.classList.remove("hidden");
+  const initialNotes = mergeTimelineNotes(feedback.performanceNotes, timeline);
+  renderTimeline(initialNotes);
+  enableFeedbackChat({
+    transcript,
+    durationSeconds: elapsed,
+    wpm,
+    fillers: fillers.total,
+    visual,
+    audio,
+    timeline: initialNotes,
+    feedback,
+  });
+  requestVideoPerformanceNotes({
+    transcript,
+    timeline: initialNotes,
+    feedback,
+    videoBlob: source.videoBlob,
+  }).then((videoNotes) => {
+    if (videoNotes.length) {
+      const merged = mergeTimelineNotes(initialNotes, videoNotes);
+      renderTimeline(merged);
+      if (state.lastFeedbackContext) state.lastFeedbackContext.timeline = merged;
+    }
+  });
   say(feedback.coachResponse, feedback.avatarState);
 }
 
@@ -811,6 +944,7 @@ function buildLocalFeedback({ audio, fillers, scores, transcript, visual, wpm })
     ],
     suggestedRewrite: buildRewrite(transcript, scores),
     followupQuestion: followupForContext(state.context),
+    performanceNotes: buildGenericTimeline(scores, visual, audio),
   };
 }
 
@@ -822,6 +956,7 @@ function normalizeFeedback(feedback, fallback) {
     content: normalizeRows(feedback.content, fallback.content),
     suggestedRewrite: feedback.suggestedRewrite || fallback.suggestedRewrite,
     followupQuestion: feedback.followupQuestion || fallback.followupQuestion,
+    performanceNotes: normalizePerformanceNotes(feedback.performanceNotes, fallback.performanceNotes),
   };
 }
 
@@ -841,12 +976,344 @@ function normalizeRows(rows, fallbackRows) {
   });
 }
 
+function recordTranscriptSegment(text) {
+  const cleanText = text.trim();
+  if (!cleanText) return;
+
+  const time = getElapsedSeconds();
+  state.transcriptSegments.push({ time, text: cleanText });
+
+  const lower = cleanText.toLowerCase();
+  const weakTerms = ["basically", "kind of", "sort of", "thing", "stuff", "you know"];
+  const matchedWeakTerm = weakTerms.find((term) => lower.includes(term));
+  if (matchedWeakTerm) {
+    addTimelineEvent("wording", time, "Loose wording", `"${matchedWeakTerm}" can sound vague here. Replace it with a specific user, problem, or result.`);
+  }
+  if (/\bgive me\b|\bi will listen\b|\blistening for\b/.test(lower)) {
+    addTimelineEvent("wording", time, "Prompt-like phrasing", "This sounds like instructions to the coach rather than your actual presentation opening.");
+  }
+}
+
+function recordVisionEvent(sample) {
+  const level = effectiveEyeLevel(sample);
+  if (sample.faceDetectorActive && !sample.faceDetected) {
+    addTimelineEvent("eye", getElapsedSeconds(), "Face left frame", "The tracker lost your face here. Re-center before the next key point.", 5);
+    return;
+  }
+  if (!sample.isBlinking && (level > 0.3 || sample.recentAlert)) {
+    const direction = sample.horizontalBias > 0 ? "camera right" : "camera left";
+    addTimelineEvent("eye", getElapsedSeconds(), "Eye drift", `Your eye line drifted toward ${direction}. Re-lock on the lens for the next sentence.`, 4);
+  }
+}
+
+function recordAudioEvent(sample) {
+  const time = getElapsedSeconds();
+  if (sample.voiced && volumeScore(sample.db) < 0.38) {
+    addTimelineEvent("audio", time, "Low volume", "Your voice dropped here. Add a little more projection on the next sentence.", 5);
+  }
+  if (sample.voiced && sample.pitchHz > 0 && pitchScore(sample) < 0.38) {
+    addTimelineEvent("audio", time, "Flat tone", "Pitch variation was low here. Lift the key phrase so it sounds more intentional.", 6);
+  }
+  if (!sample.voiced && state.recentPauseMs > 1100) {
+    addTimelineEvent("pause", time, "Long pause", "This pause may feel long unless it follows a major point.", 6);
+  }
+}
+
+function addTimelineEvent(type, time, label, detail, cooldownSeconds = 3) {
+  const rounded = Math.max(0, Math.round(time));
+  const key = `${type}:${label}`;
+  if (rounded - (state.eventCooldowns[key] ?? -Infinity) < cooldownSeconds) return;
+  state.eventCooldowns[key] = rounded;
+  state.timelineEvents.push({ type, time: rounded, label, detail });
+  if (state.timelineEvents.length > 36) state.timelineEvents.shift();
+}
+
+function buildTimelineEvents() {
+  const events = [...state.timelineEvents];
+  if (!events.length && state.transcriptSegments.length) {
+    const first = state.transcriptSegments[0];
+    events.push({
+      type: "wording",
+      time: first.time,
+      label: "Opening line",
+      detail: `Review this opening: "${first.text.slice(0, 110)}"`,
+    });
+  }
+
+  return events
+    .sort((a, b) => a.time - b.time)
+    .filter((event, index, list) => index === 0 || event.time !== list[index - 1].time || event.label !== list[index - 1].label)
+    .slice(0, 8);
+}
+
+function buildGenericTimeline(scores, visual, audio) {
+  const notes = [];
+  if (scores.problem < 6) notes.push({ type: "wording", time: 5, label: "Problem clarity", detail: "The opening needs a clearer audience problem." });
+  if (visual.eyeScore < 0.55) notes.push({ type: "eye", time: 12, label: "Eye contact", detail: "Review this section for eye drift and re-lock on the lens." });
+  if (audio.volumeScore < 0.45) notes.push({ type: "audio", time: 18, label: "Volume", detail: "Voice energy sounded low around this part." });
+  if (audio.pitchScore < 0.45) notes.push({ type: "audio", time: 24, label: "Pitch variation", detail: "Add more vocal lift on the key idea." });
+  return notes;
+}
+
+function normalizePerformanceNotes(notes, fallbackNotes = []) {
+  if (!Array.isArray(notes) || notes.length === 0) return fallbackNotes || [];
+  return notes.slice(0, 8).map((note, index) => ({
+    time: Number.isFinite(Number(note.time)) ? Number(note.time) : Number(note.second ?? fallbackNotes[index]?.time ?? 0),
+    type: normalizeNoteType(note.type || fallbackNotes[index]?.type),
+    label: note.label || fallbackNotes[index]?.label || "Review moment",
+    detail: note.detail || note.value || fallbackNotes[index]?.detail || "",
+  }));
+}
+
+function normalizeNoteType(type = "moment") {
+  if (["eye", "wording", "audio", "pause", "posture"].includes(type)) return type;
+  if (["volume", "pitch", "energy"].includes(type)) return "audio";
+  if (["gesture", "movement", "head"].includes(type)) return "posture";
+  return "wording";
+}
+
+function mergeTimelineNotes(primary = [], secondary = []) {
+  const merged = [...normalizePerformanceNotes(primary, []), ...normalizePerformanceNotes(secondary, [])];
+  const seen = new Set();
+  return merged
+    .sort((a, b) => a.time - b.time)
+    .filter((note) => {
+      const key = `${Math.round(note.time)}:${note.type}:${note.label}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 10);
+}
+
+function renderTimeline(notes) {
+  const normalized = normalizePerformanceNotes(notes, []);
+  eventTimeline.innerHTML = "";
+  timelineStatus.textContent = normalized.length ? `${normalized.length} moments` : "No moments";
+  reviewPanel.classList.remove("hidden");
+  hideMomentDetail();
+
+  if (!normalized.length) return;
+
+  const duration = Math.max(recordingPlayback.duration || state.lastFeedbackContext?.durationSeconds || getElapsedSeconds() || 60, 1);
+  normalized.forEach((note) => {
+    const button = document.createElement("button");
+    button.className = `timeline-marker ${note.type}`;
+    button.type = "button";
+    button.style.left = `${Math.min(Math.max((Number(note.time) / duration) * 100, 1), 99)}%`;
+    button.setAttribute("aria-label", `${formatTime(Math.round(note.time))} ${note.label}`);
+    button.addEventListener("mouseenter", () => showMomentDetail(note));
+    button.addEventListener("focus", () => showMomentDetail(note));
+    button.addEventListener("mouseleave", hideMomentDetail);
+    button.addEventListener("blur", hideMomentDetail);
+    button.addEventListener("click", () => {
+      if (recordingPlayback.src) {
+        recordingPlayback.pause();
+        recordingPlayback.currentTime = Math.max(0, Math.min(Number(note.time), duration));
+      }
+      showMomentDetail(note);
+    });
+    eventTimeline.appendChild(button);
+  });
+}
+
+function showMomentDetail(note) {
+  momentDetail.classList.remove("hidden");
+  timelineStatus.textContent = "Selected";
+  momentTitle.textContent = `${formatTime(Math.round(note.time))} ${note.label}`;
+  momentText.textContent = note.detail;
+}
+
+function hideMomentDetail() {
+  momentDetail.classList.add("hidden");
+  momentTitle.textContent = "";
+  momentText.textContent = "";
+}
+
+function clearRecordingReview() {
+  reviewPanel.classList.add("hidden");
+  eventTimeline.innerHTML = "";
+  hideMomentDetail();
+  timelineStatus.textContent = "Waiting";
+  recordingStatus.textContent = "No recording";
+  recordingPlayback.removeAttribute("src");
+  recordingPlayback.load();
+  if (state.recordingUrl && state.recordingUrl !== state.uploadUrl) URL.revokeObjectURL(state.recordingUrl);
+  state.recordingUrl = "";
+  state.recordingBlob = null;
+}
+
+async function requestVideoPerformanceNotes(context) {
+  const videoBlob = context.videoBlob || state.recordingBlob || (state.uploadMedia?.tagName === "VIDEO" ? state.uploadFileBlob : null);
+  if (!videoBlob || videoBlob.size > 18 * 1024 * 1024) return [];
+
+  try {
+    recordingStatus.textContent = "Gemini video";
+    const videoData = await blobToBase64(videoBlob);
+    const response = await fetch("/api/video-feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mimeType: videoBlob.type || "video/webm",
+        videoData,
+        context: {
+          presentation: state.context,
+          transcript: context.transcript,
+          timeline: context.timeline,
+          feedback: context.feedback,
+          transcriptSegments: state.transcriptSegments.slice(0, 24),
+        },
+      }),
+    });
+
+    if (!response.ok) throw new Error(`Video feedback returned ${response.status}`);
+    const result = await response.json();
+    recordingStatus.textContent = result.source === "gemini" ? "Gemini video" : "Ready";
+    return normalizePerformanceNotes(result.performanceNotes, []);
+  } catch {
+    recordingStatus.textContent = "Ready";
+    return [];
+  }
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || "").split(",")[1] || "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+function enableFeedbackChat(context) {
+  state.lastFeedbackContext = {
+    presentation: state.context,
+    transcript: context.transcript,
+    durationSeconds: context.durationSeconds,
+    delivery: {
+      wordsPerMinute: context.wpm,
+      fillerWords: context.fillers,
+      visual: context.visual,
+      audio: context.audio,
+    },
+    timeline: context.timeline,
+    transcriptSegments: state.transcriptSegments.slice(0, 24),
+    feedback: context.feedback,
+  };
+  state.chatHistory = [];
+  chatMessages.innerHTML = "";
+  appendChatMessage("assistant", "Ask me anything about this feedback, or ask for a stronger rewrite.");
+  chatPanel.classList.remove("hidden");
+  setChatStatus("Gemini ready");
+  chatInput.disabled = false;
+  chatSendBtn.disabled = false;
+}
+
+async function handleChatSubmit(event) {
+  event.preventDefault();
+  const question = chatInput.value.trim();
+  if (!question || !state.lastFeedbackContext) return;
+
+  chatInput.value = "";
+  appendChatMessage("user", question);
+  setChatStatus("Thinking", true);
+  chatInput.disabled = true;
+  chatSendBtn.disabled = true;
+
+  try {
+    const result = await requestFeedbackChat(question);
+    const answer = result.answer || "I could not generate a follow-up answer. Try asking in a simpler way.";
+    appendChatMessage("assistant", answer);
+    state.chatHistory.push({ role: "user", content: question }, { role: "assistant", content: answer });
+    setChatStatus(result.source === "gemini" ? "Gemini" : result.source === "feedback-fallback" ? "Gemini fallback" : "Local");
+  } catch (error) {
+    const answer = error?.message || "I could not reach Gemini for this follow-up. Try again after checking the server.";
+    appendChatMessage("assistant", answer);
+    state.chatHistory.push({ role: "user", content: question }, { role: "assistant", content: answer });
+    setChatStatus("Chat unavailable");
+  } finally {
+    chatInput.disabled = false;
+    chatSendBtn.disabled = false;
+    chatInput.focus();
+  }
+}
+
+async function requestFeedbackChat(question) {
+  const response = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      question,
+      context: state.lastFeedbackContext,
+      history: state.chatHistory.slice(-8),
+    }),
+  });
+
+  if (response.ok) return response.json();
+  if (![404, 405].includes(response.status)) {
+    throw new Error(`Chat API returned ${response.status}. Check the Node server terminal.`);
+  }
+
+  const fallbackResponse = await fetch("/api/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      context: state.lastFeedbackContext?.presentation || state.context,
+      transcript: [
+        "This is a follow-up coaching chat, not a new presentation.",
+        `User question: ${question}`,
+        `Previous transcript: ${state.lastFeedbackContext?.transcript || ""}`,
+        `Previous feedback: ${JSON.stringify(state.lastFeedbackContext?.feedback || {})}`,
+      ].join("\n\n"),
+      durationSeconds: state.lastFeedbackContext?.durationSeconds || 60,
+      delivery: state.lastFeedbackContext?.delivery || {},
+      visual: state.lastFeedbackContext?.delivery?.visual || {},
+      audio: state.lastFeedbackContext?.delivery?.audio || {},
+      timeline: state.lastFeedbackContext?.timeline || [],
+      transcriptSegments: state.lastFeedbackContext?.transcriptSegments || [],
+    }),
+  });
+
+  if (!fallbackResponse.ok) throw new Error(`Feedback fallback returned ${fallbackResponse.status}. Check the Node server terminal.`);
+  const feedback = await fallbackResponse.json();
+  return {
+    answer: feedback.coachResponse || feedback.suggestedRewrite || "Try focusing on one specific improvement from the feedback.",
+    source: feedback.source === "gemini" ? "feedback-fallback" : "local",
+  };
+}
+
+function appendChatMessage(role, text) {
+  const message = document.createElement("p");
+  message.className = `chat-message ${role}`;
+  message.textContent = text;
+  chatMessages.appendChild(message);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function setChatStatus(text, loading = false) {
+  chatStatus.textContent = text;
+  chatStatus.classList.toggle("loading", loading);
+}
+
+function resetFeedbackChat() {
+  state.lastFeedbackContext = null;
+  state.chatHistory = [];
+  chatMessages.innerHTML = "";
+  chatPanel.classList.add("hidden");
+  setChatStatus("Ready after feedback");
+  chatInput.value = "";
+  chatInput.disabled = true;
+  chatSendBtn.disabled = true;
+}
+
 function handleUploadFile() {
   const file = uploadFile.files?.[0];
   clearUploadPreview();
   resetDashboard();
+  resetFeedbackChat();
 
   if (!file) {
+    state.uploadFileBlob = null;
     syncUploadControls();
     return;
   }
@@ -876,6 +1343,7 @@ function handleUploadFile() {
     mediaPreview.appendChild(media);
     mediaPreview.classList.remove("hidden");
     state.uploadMedia = media;
+    state.uploadFileBlob = file;
     media.addEventListener("loadedmetadata", () => {
       state.uploadDuration = Number.isFinite(media.duration) ? Math.max(Math.round(media.duration), 1) : 60;
       syncUploadControls();
@@ -888,26 +1356,36 @@ function handleUploadFile() {
 
 async function analyzeUpload() {
   const transcript = uploadTranscript.value.trim();
+  const isVideoUpload = state.uploadMedia?.tagName === "VIDEO" && state.uploadFileBlob;
 
-  if (!transcript) {
-    say("I need a transcript for content feedback. Paste the words from the pitch, then analyze again.", "confused");
+  if (!transcript && !isVideoUpload) {
+    say("I need a transcript for content feedback. Paste the words from the presentation, then analyze again.", "confused");
     uploadTranscript.focus();
     return;
   }
 
   state.transcript = transcript;
   state.interim = "";
-  state.transcriptEvents = [{ atSeconds: 0, text: transcript, type: "upload" }];
+  state.transcriptEvents = transcript ? [{ atSeconds: 0, text: transcript, type: "upload" }] : [];
   state.liveEvents = [];
+  state.timelineEvents = [];
+  state.transcriptSegments = transcript ? [{ time: 0, text: transcript }] : [];
+  state.eventCooldowns = {};
   resetInterruptionState();
-  transcriptEl.textContent = transcript;
+  transcriptEl.textContent = transcript || "Video uploaded. Gemini will review the recording directly.";
   speechStatus.textContent = "Upload analyzed";
 
   const visual = await summarizeUploadVisual();
+  if (isVideoUpload) {
+    recordingPlayback.src = state.uploadUrl;
+    recordingStatus.textContent = "Uploaded video";
+    reviewPanel.classList.remove("hidden");
+  }
   showFeedback({
     transcript,
     durationSeconds: state.uploadDuration || estimateDurationFromTranscript(transcript),
     visual,
+    videoBlob: isVideoUpload ? state.uploadFileBlob : null,
   });
 }
 
@@ -936,6 +1414,7 @@ function clearUpload() {
   uploadTranscript.value = "";
   uploadStatus.textContent = "No file";
   state.uploadDuration = 60;
+  state.uploadFileBlob = null;
   clearUploadPreview();
   syncUploadControls();
 }
@@ -1147,6 +1626,8 @@ function renderTrackingOverlay(sample) {
   if (!overlayCtx) return;
 
   overlayCtx.clearRect(0, 0, trackingOverlay.width, trackingOverlay.height);
+  if (!state.overlayVisible) return;
+
   if (sample.faceDetectorActive && !sample.faceDetected) {
     overlayCtx.strokeStyle = "#94a3b8";
     overlayCtx.lineWidth = 1.2;
@@ -1186,6 +1667,15 @@ function renderTrackingOverlay(sample) {
 function clearTrackingOverlay() {
   if (!overlayCtx) return;
   overlayCtx.clearRect(0, 0, trackingOverlay.width, trackingOverlay.height);
+}
+
+function toggleTrackingOverlay() {
+  state.overlayVisible = !state.overlayVisible;
+  trackingOverlay.classList.toggle("hidden-overlay", !state.overlayVisible);
+  trackingToggle.classList.toggle("active", state.overlayVisible);
+  trackingToggle.setAttribute("aria-pressed", String(state.overlayVisible));
+  trackingToggle.textContent = state.overlayVisible ? "Face box" : "Face box off";
+  if (!state.overlayVisible) clearTrackingOverlay();
 }
 
 function computeRecentEyeActivity(sample, now) {
