@@ -12,6 +12,7 @@ const speechStatus = document.querySelector("#speechStatus");
 const signalStatus = document.querySelector("#signalStatus");
 const transcriptEl = document.querySelector("#transcript");
 const coachMessage = document.querySelector("#coachMessage");
+const coachLabel = document.querySelector(".coach-label");
 const avatar = document.querySelector("#avatar");
 const dashboard = document.querySelector("#dashboard");
 const deliveryList = document.querySelector("#deliveryList");
@@ -81,14 +82,17 @@ const state = {
 
 const audienceCopy = {
   hackathon: {
+    label: "Coach",
     start: "Give me the first 60 seconds of your hackathon pitch. I am listening for the user problem, demo clarity, and what makes it matter.",
     followup: "What is the one moment in your demo that proves this is more than a concept?",
   },
   interview: {
+    label: "Interviewer",
     start: "Answer as if this were a technical interview. I will listen for tradeoffs, ownership, and clear examples.",
     followup: "What tradeoff did you make, and what would you change with another week?",
   },
   investor: {
+    label: "Investor",
     start: "Pitch this like an investor meeting. I will look for market pain, traction, differentiation, and a strong ask.",
     followup: "Who urgently needs this, and why will they choose you over the current workaround?",
   },
@@ -99,6 +103,7 @@ document.querySelectorAll(".mode").forEach((button) => {
     document.querySelectorAll(".mode").forEach((item) => item.classList.remove("active"));
     button.classList.add("active");
     state.mode = button.dataset.mode;
+    updateCoachLabel();
     say(audienceCopy[state.mode].start, "listening");
   });
 });
@@ -110,6 +115,8 @@ uploadFile.addEventListener("change", handleUploadFile);
 uploadTranscript.addEventListener("input", syncUploadControls);
 analyzeUploadBtn.addEventListener("click", analyzeUpload);
 clearUploadBtn.addEventListener("click", clearUpload);
+updateCoachLabel();
+setAvatarState("listening");
 
 async function startSession() {
   resetDashboard();
@@ -1367,15 +1374,33 @@ function say(message, expression) {
   const utterance = new SpeechSynthesisUtterance(message);
   utterance.rate = 0.98;
   utterance.pitch = 0.95;
+  utterance.onstart = () => {
+    setAvatarState("speaking", true);
+  };
+  utterance.onboundary = () => {
+    avatar.classList.add("mouth-pop");
+    window.setTimeout(() => avatar.classList.remove("mouth-pop"), 90);
+  };
+  utterance.onerror = () => {
+    setAvatarState("listening", false);
+  };
   utterance.onend = () => {
-    if (avatar.classList.contains("speaking")) avatar.className = "avatar listening";
+    setAvatarState("listening", false);
   };
   window.speechSynthesis.speak(utterance);
 }
 
 function updateCoach(message, expression) {
   coachMessage.textContent = message;
-  avatar.className = `avatar ${expression}`;
+  setAvatarState(expression, false);
+}
+
+function updateCoachLabel() {
+  coachLabel.textContent = audienceCopy[state.mode].label;
+}
+
+function setAvatarState(expression = "listening", talking = false) {
+  avatar.className = `avatar ${state.mode}-avatar ${expression}${talking ? " talking" : ""}`;
 }
 
 function resetDashboard() {

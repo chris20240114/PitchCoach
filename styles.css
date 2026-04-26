@@ -191,7 +191,24 @@ h2 {
   justify-self: center;
   max-width: 170px;
   min-width: 130px;
+  overflow: hidden;
+  position: relative;
+  transition: background 180ms ease, border-color 180ms ease, transform 180ms ease;
   width: 48%;
+}
+
+.avatar-photo {
+  background-image: url("assets/interviewer-sprite.png");
+  background-position: left center;
+  background-repeat: no-repeat;
+  background-size: 200% 100%;
+  border-radius: 10px;
+  display: none;
+  height: 100%;
+  inset: 0;
+  position: absolute;
+  width: 100%;
+  z-index: 3;
 }
 
 .avatar-face {
@@ -201,6 +218,29 @@ h2 {
   height: 70%;
   position: relative;
   width: 68%;
+  z-index: 2;
+}
+
+.avatar-shoulders {
+  background: #1f2937;
+  border-radius: 999px 999px 0 0;
+  bottom: -8%;
+  height: 32%;
+  left: 18%;
+  position: absolute;
+  right: 18%;
+  z-index: 1;
+}
+
+.avatar::before {
+  background: rgba(255, 255, 255, 0.42);
+  border-radius: 50%;
+  content: "";
+  height: 56%;
+  left: 18%;
+  position: absolute;
+  top: 10%;
+  width: 64%;
 }
 
 .eye {
@@ -213,12 +253,35 @@ h2 {
   width: 10px;
 }
 
-.eye.left {
+.eye.left,
+.brow.left {
   left: 28%;
 }
 
-.eye.right {
+.eye.right,
+.brow.right {
   right: 28%;
+}
+
+.brow {
+  background: #172022;
+  border-radius: 999px;
+  height: 3px;
+  position: absolute;
+  top: 29%;
+  width: 18px;
+}
+
+.nose {
+  border: 2px solid #c98f66;
+  border-left: 0;
+  border-top: 0;
+  height: 12px;
+  left: 49%;
+  position: absolute;
+  top: 45%;
+  transform: rotate(18deg);
+  width: 8px;
 }
 
 .mouth {
@@ -238,6 +301,14 @@ h2 {
   background: #fde68a;
 }
 
+.avatar.confused .brow.left {
+  transform: rotate(12deg);
+}
+
+.avatar.confused .brow.right {
+  transform: rotate(-12deg);
+}
+
 .avatar.confused .mouth {
   border-bottom: 0;
   border-top: 3px solid #172022;
@@ -248,14 +319,66 @@ h2 {
   background: #bfdbfe;
 }
 
-.avatar.speaking .mouth {
+.avatar.speaking .mouth,
+.avatar.talking .mouth {
   border: 3px solid #172022;
   border-radius: 50%;
   height: 20px;
 }
 
+.avatar.talking .mouth {
+  animation: talk-mouth 150ms ease-in-out infinite alternate;
+}
+
+.avatar.mouth-pop .mouth {
+  transform: scaleY(1.35);
+}
+
 .avatar.nodding {
   animation: nod 900ms ease-in-out infinite;
+}
+
+.avatar.interview-avatar {
+  background: #101820;
+  border: 1px solid #24313d;
+  border-radius: 14px;
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.18);
+  max-width: 210px;
+  width: 62%;
+}
+
+.avatar.interview-avatar::before,
+.avatar.interview-avatar .avatar-face,
+.avatar.interview-avatar .avatar-shoulders {
+  display: none;
+}
+
+.avatar.interview-avatar .avatar-photo {
+  display: block;
+}
+
+.avatar.interview-avatar.speaking .avatar-photo,
+.avatar.interview-avatar.talking .avatar-photo {
+  background-position: right center;
+}
+
+.avatar.interview-avatar.talking .avatar-photo {
+  animation: interviewer-talk 210ms steps(1, end) infinite;
+}
+
+.avatar.interview-avatar.speaking,
+.avatar.interview-avatar.talking {
+  transform: translateY(-2px);
+}
+
+.avatar.investor-avatar {
+  background: #fef3c7;
+  border-color: #f59e0b;
+}
+
+.avatar.hackathon-avatar {
+  background: #d7ede9;
+  border-color: #b7d6d0;
 }
 
 @keyframes nod {
@@ -265,6 +388,27 @@ h2 {
   }
   50% {
     transform: translateY(8px);
+  }
+}
+
+@keyframes talk-mouth {
+  from {
+    height: 9px;
+    transform: scaleX(0.82);
+  }
+  to {
+    height: 23px;
+    transform: scaleX(1.12);
+  }
+}
+
+@keyframes interviewer-talk {
+  0%,
+  100% {
+    background-position: left center;
+  }
+  50% {
+    background-position: right center;
   }
 }
 
