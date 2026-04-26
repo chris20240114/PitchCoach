@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PitchMirror - AI Presentation Coach</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace" aria-label="PitchMirror coach workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">PitchMirror</p>
+            <h1>Hackathon Pitch Coach</h1>
+          </div>
+          <div class="mode-switch" aria-label="Audience mode">
+            <button class="mode active" data-mode="hackathon">Judge</button>
+            <button class="mode" data-mode="interview">Interviewer</button>
+            <button class="mode" data-mode="investor">Investor</button>
+          </div>
+        </header>
+
+        <section class="stage">
+          <div class="camera-panel">
+            <video id="camera" autoplay playsinline muted></video>
+            <canvas id="visionCanvas" width="320" height="180" aria-hidden="true"></canvas>
+            <div class="camera-overlay">
+              <span id="cameraStatus">Camera off</span>
+              <span id="timer">00:00</span>
+            </div>
+          </div>
+
+          <aside class="coach-panel" aria-label="Live AI coach">
+            <div id="avatar" class="avatar listening">
+              <div class="avatar-face">
+                <span class="eye left"></span>
+                <span class="eye right"></span>
+                <span class="mouth"></span>
+              </div>
+            </div>
+            <div>
+              <p class="coach-label">Coach</p>
+              <p id="coachMessage" class="coach-message">Start a 60-second pitch. I will listen for problem clarity, pace, filler words, and camera presence.</p>
+            </div>
+            <div class="coach-actions">
+              <button id="startBtn" class="primary">Start pitch</button>
+              <button id="stopBtn" disabled>Stop</button>
+              <button id="retryBtn" disabled>Retry</button>
+            </div>
+          </aside>
+        </section>
+
+        <section class="lower-grid">
+          <article class="panel transcript-panel">
+            <div class="panel-heading">
+              <h2>Live Transcript</h2>
+              <span id="speechStatus">Speech idle</span>
+            </div>
+            <p id="transcript" class="transcript">Your pitch transcript will appear here as you speak.</p>
+          </article>
+
+          <article class="panel signals-panel">
+            <div class="panel-heading">
+              <h2>Live Signals</h2>
+              <span id="signalStatus">Waiting</span>
+            </div>
+            <div class="signal-list">
+              <div>
+                <span>Eye contact</span>
+                <strong id="eyeSignal">--</strong>
+              </div>
+              <div>
+                <span>Face position</span>
+                <strong id="positionSignal">--</strong>
+              </div>
+              <div>
+                <span>Lighting</span>
+                <strong id="lightingSignal">--</strong>
+              </div>
+              <div>
+                <span>Movement</span>
+                <strong id="movementSignal">--</strong>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <section id="dashboard" class="dashboard hidden" aria-label="Feedback dashboard">
+          <div class="panel delivery">
+            <h2>Delivery</h2>
+            <ul id="deliveryList"></ul>
+          </div>
+          <div class="panel content">
+            <h2>Content</h2>
+            <ul id="contentList"></ul>
+          </div>
+          <div class="panel rewrite">
+            <h2>Suggested Rewrite</h2>
+            <p id="rewriteText"></p>
+          </div>
+          <div class="panel followup">
+            <h2>Follow-up Question</h2>
+            <p id="followupText"></p>
+          </div>
+        </section>
+      </section>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

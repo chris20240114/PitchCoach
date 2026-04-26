@@ -74,9 +74,9 @@ LLM-powered evaluation of:
 
 ### Data Flow
 ```
-Audio Input → Speech-to-Text → Transcript Analysis
-Video Input → Visual Heuristics → Delivery Signals
-Combined Analysis → Coach Response → TTS → Avatar Animation
+Audio Input -> Speech-to-Text -> Transcript Analysis
+Video Input -> Visual Heuristics -> Delivery Signals
+Combined Analysis -> Coach Response -> TTS -> Avatar Animation
 ```
 
 ## Why This Matters
@@ -93,33 +93,25 @@ PitchCoach combines all three modalities for truly comprehensive feedback.
 ## Installation & Setup
 
 ### Prerequisites
-- Python 3.11+
-- Webcam and microphone
-- Internet connection for LLM processing
+- A modern Chromium-based browser for the best speech recognition support
+- Webcam and microphone permissions
+- Python 3.11+ or any static file server for localhost
 
 ### Quick Start
 ```bash
-# Clone the repository
-git clone https://github.com/chris20240114/PitchCoach.git
-cd PitchCoach
+# From the project folder
+py -m http.server 8000
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run the application
-python app.py
+# Open in your browser
+http://localhost:8000
 ```
 
-### Dependencies
-- Speech recognition library
-- Computer vision (OpenCV/MediaPipe)
-- LLM integration (OpenAI/Anthropic)
-- Text-to-speech engine
-- Web framework (Flask/FastAPI)
+### Current MVP
+- Browser speech recognition for live transcript capture
+- Browser speech synthesis for spoken coach feedback
+- Webcam-based visual heuristics for camera presence, lighting, and movement
+- Deterministic pitch scoring for pace, filler words, problem clarity, user specificity, demo clarity, impact, and call to action
+- Audience modes for hackathon judge, technical interviewer, and investor
 
 ## Usage Examples
 
@@ -182,6 +174,4 @@ MIT License - see LICENSE file for details.
 ## Contact
 
 For questions or feedback, reach out to the maintainers or open an issue on GitHub.
-
-
 
