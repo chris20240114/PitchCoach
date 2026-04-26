@@ -32,6 +32,16 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/chat") {
+      await handleChat(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/video-feedback") {
+      await handleVideoFeedback(request, response);
+      return;
+    }
+
     if (request.method !== "GET" && request.method !== "HEAD") {
       sendJson(response, 405, { error: "Method not allowed" });
       return;
@@ -104,12 +114,50 @@ async function handleFeedback(request, response) {
   }
 }
 
+async function handleChat(request, response) {
+  const payload = await readJsonBody(request);
+  const fallback = buildFallbackChat(payload);
+
+  if (!process.env.LLM_API_URL || !process.env.LLM_API_KEY || !process.env.LLM_MODEL) {
+    sendJson(response, 200, { answer: fallback, source: "local" });
+    return;
+  }
+
+  try {
+    const answer = await requestLlmChat(payload);
+    sendJson(response, 200, { answer, source: "llm" });
+  } catch (error) {
+    console.error("LLM chat failed:", error);
+    sendJson(response, 200, { answer: fallback, source: "local", warning: "LLM unavailable; used local fallback." });
+  }
+}
+
+async function handleVideoFeedback(request, response) {
+  const payload = await readJsonBody(request);
+
+  if (!process.env.LLM_API_KEY || !process.env.LLM_MODEL || !payload?.videoData) {
+    sendJson(response, 200, { performanceNotes: [], source: "local" });
+    return;
+  }
+
+  try {
+    const performanceNotes = await requestGeminiVideoFeedback(payload);
+    sendJson(response, 200, { performanceNotes, source: "llm" });
+  } catch (error) {
+    console.error("Gemini video feedback failed:", error);
+    sendJson(response, 200, { performanceNotes: [], source: "local", warning: "Video feedback unavailable." });
+  }
+}
+
 async function requestLlmFeedback(payload) {
   const prompt = [
     "You are PitchMirror, a direct but constructive AI presentation coach.",
     "Evaluate this pitch using the supplied transcript and delivery signals.",
-    "Return only JSON with keys: coachResponse, delivery, content, suggestedRewrite, followupQuestion.",
+    "Return only JSON with keys: coachResponse, delivery, content, performanceNotes, suggestedRewrite, followupQuestion.",
     "delivery and content must be arrays of objects with label, value, and score from 0 to 1.",
+    "performanceNotes must be an array of up to 6 objects with time, type, label, and detail. Use exact seconds from the supplied timeline when available.",
+    "If transcriptSegments are supplied, use their time values to identify wording moments by second.",
+    "Call out specific wording issues, eye drift, volume, pause, or pitch variation at the relevant second.",
     "Do not overclaim emotion detection. Mention visual signals only as observable behavior.",
     "",
     JSON.stringify(payload, null, 2),
@@ -141,6 +189,119 @@ async function requestLlmFeedback(payload) {
   }
 
   return JSON.parse(text);
+}
+
+async function requestLlmChat(payload) {
+  const context = payload?.context || {};
+  const history = Array.isArray(payload?.history) ? payload.history.slice(-8) : [];
+  const question = String(payload?.question || "").trim();
+  const prompt = [
+    "You are PitchMirror, a concise AI presentation coach.",
+    "Answer the user's follow-up question using the pitch transcript, delivery signals, and feedback context.",
+    "Be specific and actionable. Do not invent details that are not in the context.",
+    "Return only JSON with key: answer.",
+    "",
+    JSON.stringify({ question, context }, null, 2),
+  ].join("\n");
+
+  const result = await fetch(process.env.LLM_API_URL, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.LLM_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: process.env.LLM_MODEL,
+      messages: [
+        ...history.map((item) => ({
+          role: item.role === "assistant" ? "assistant" : "user",
+          content: String(item.content || ""),
+        })),
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.35,
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  if (!result.ok) {
+    throw new Error(`LLM chat request failed with ${result.status}`);
+  }
+
+  const data = await result.json();
+  const text = data.choices?.[0]?.message?.content || data.output_text;
+  if (!text) throw new Error("LLM chat response did not include JSON text.");
+
+  const parsed = JSON.parse(text);
+  return parsed.answer || buildFallbackChat(payload);
+}
+
+async function requestGeminiVideoFeedback(payload) {
+  const context = payload?.context || {};
+  const prompt = [
+    "You are PitchMirror reviewing a recorded practice pitch video.",
+    "Return only JSON with key performanceNotes.",
+    "performanceNotes must be an array of up to 8 objects with time, type, label, and detail.",
+    "Use timestamps in seconds. Types must be one of: eye, wording, audio, pause, posture.",
+    "Call out observable moments only: eye drift, face leaving frame, posture/head movement, awkward pause, unclear wording, low energy, or delivery mismatch.",
+    "Prefer timestamps visible in the video/audio. Use the supplied context only as support.",
+    "",
+    JSON.stringify(context, null, 2),
+  ].join("\n");
+
+  const result = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${process.env.LLM_MODEL}:generateContent`, {
+    method: "POST",
+    headers: {
+      "x-goog-api-key": process.env.LLM_API_KEY,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      contents: [{
+        parts: [
+          {
+            inline_data: {
+              mime_type: payload.mimeType || "video/webm",
+              data: payload.videoData,
+            },
+          },
+          { text: prompt },
+        ],
+      }],
+      generationConfig: {
+        temperature: 0.25,
+        responseMimeType: "application/json",
+      },
+    }),
+  });
+
+  if (!result.ok) {
+    throw new Error(`Gemini video request failed with ${result.status}`);
+  }
+
+  const data = await result.json();
+  const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || "";
+  if (!text) throw new Error("Gemini video response did not include JSON text.");
+  const parsed = JSON.parse(text);
+  return Array.isArray(parsed.performanceNotes) ? parsed.performanceNotes : [];
+}
+
+function buildFallbackChat(payload) {
+  const question = String(payload?.question || "").toLowerCase();
+  const feedback = payload?.context?.feedback || {};
+
+  if (question.includes("rewrite") || question.includes("say") || question.includes("怎么说") || question.includes("改写") || question.includes("重写") || question.includes("怎么改")) {
+    return feedback.suggestedRewrite || "Start with the audience's problem, then give one concrete proof point and a clear ask.";
+  }
+
+  if (question.includes("eye") || question.includes("camera") || question.includes("眼神") || question.includes("镜头")) {
+    return "Use the camera as the audience member. Hold eye contact on your strongest sentence, then glance away only during natural transitions.";
+  }
+
+  if (question.includes("pace") || question.includes("speed") || question.includes("语速")) {
+    return "Add a short pause after the problem sentence and before the demo sentence. That usually makes the pitch feel more controlled.";
+  }
+
+  return feedback.coachResponse || "Focus on one concrete improvement from the feedback, then practice the same pitch once more.";
 }
 
 function buildFallbackFeedback(payload) {

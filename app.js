@@ -3,6 +3,7 @@ const canvas = document.querySelector("#visionCanvas");
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
 const trackingOverlay = document.querySelector("#trackingOverlay");
 const overlayCtx = trackingOverlay.getContext("2d");
+const trackingToggle = document.querySelector("#trackingToggle");
 const startBtn = document.querySelector("#startBtn");
 const stopBtn = document.querySelector("#stopBtn");
 const retryBtn = document.querySelector("#retryBtn");
@@ -19,6 +20,20 @@ const deliveryList = document.querySelector("#deliveryList");
 const contentList = document.querySelector("#contentList");
 const rewriteText = document.querySelector("#rewriteText");
 const followupText = document.querySelector("#followupText");
+const reviewPanel = document.querySelector("#reviewPanel");
+const recordingStatus = document.querySelector("#recordingStatus");
+const recordingPlayback = document.querySelector("#recordingPlayback");
+const timelineStatus = document.querySelector("#timelineStatus");
+const eventTimeline = document.querySelector("#eventTimeline");
+const momentDetail = document.querySelector("#momentDetail");
+const momentTitle = document.querySelector("#momentTitle");
+const momentText = document.querySelector("#momentText");
+const chatPanel = document.querySelector("#chatPanel");
+const chatStatus = document.querySelector("#chatStatus");
+const chatMessages = document.querySelector("#chatMessages");
+const chatForm = document.querySelector("#chatForm");
+const chatInput = document.querySelector("#chatInput");
+const chatSendBtn = document.querySelector("#chatSendBtn");
 const eyeSignal = document.querySelector("#eyeSignal");
 const eyeFeedback = document.querySelector("#eyeFeedback");
 const positionSignal = document.querySelector("#positionSignal");
@@ -58,6 +73,9 @@ const state = {
   interim: "",
   samples: [],
   audioSamples: [],
+  timelineEvents: [],
+  transcriptSegments: [],
+  eventCooldowns: {},
   lastFrame: null,
   lastGazeBias: 0,
   lastEyeMid: null,
@@ -75,9 +93,17 @@ const state = {
   recentPitch: 0,
   recentPitchDelta: 0,
   speechActive: false,
+  recorder: null,
+  recordingChunks: [],
+  recordingBlob: null,
+  recordingUrl: "",
   uploadUrl: "",
   uploadDuration: 60,
   uploadMedia: null,
+  uploadFileBlob: null,
+  overlayVisible: true,
+  lastFeedbackContext: null,
+  chatHistory: [],
 };
 
 const audienceCopy = {
@@ -115,6 +141,8 @@ uploadFile.addEventListener("change", handleUploadFile);
 uploadTranscript.addEventListener("input", syncUploadControls);
 analyzeUploadBtn.addEventListener("click", analyzeUpload);
 clearUploadBtn.addEventListener("click", clearUpload);
+chatForm.addEventListener("submit", handleChatSubmit);
+trackingToggle.addEventListener("click", toggleTrackingOverlay);
 updateCoachLabel();
 setAvatarState("listening");
 
@@ -123,8 +151,14 @@ async function startSession() {
   state.transcript = "";
   state.interim = "";
   state.samples = [];
+  state.audioSamples = [];
+  state.timelineEvents = [];
+  state.transcriptSegments = [];
+  state.eventCooldowns = {};
+  state.recordingChunks = [];
   state.speechBlocked = false;
   state.startedAt = Date.now();
+  clearRecordingReview();
   transcriptEl.textContent = "Listening...";
   speechStatus.textContent = "Starting";
   startBtn.disabled = true;
@@ -132,6 +166,7 @@ async function startSession() {
   retryBtn.disabled = true;
 
   await startCamera();
+  startRecording();
   initFaceLandmarker();
   startSpeech();
   startTimer();
@@ -230,7 +265,10 @@ function startSpeech() {
       }
     }
 
-    if (finalText) state.transcript += finalText;
+    if (finalText) {
+      state.transcript += finalText;
+      recordTranscriptSegment(finalText);
+    }
     state.interim = interimText;
     renderTranscript();
     maybeInterrupt();
@@ -270,6 +308,57 @@ function startTimer() {
     timerEl.textContent = formatTime(elapsed);
     if (elapsed >= 60) stopSession();
   }, 250);
+}
+
+function startRecording() {
+  if (!state.stream || !window.MediaRecorder) {
+    recordingStatus.textContent = "Recording unavailable";
+    addTimelineEvent("recording", 0, "Recording unavailable", "This browser could not start a local recording.");
+    return;
+  }
+
+  try {
+    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")
+      ? "video/webm;codecs=vp8,opus"
+      : "video/webm";
+    state.recordingChunks = [];
+    state.recorder = new MediaRecorder(state.stream, {
+      mimeType,
+      videoBitsPerSecond: 700_000,
+      audioBitsPerSecond: 48_000,
+    });
+    state.recorder.ondataavailable = (event) => {
+      if (event.data?.size) state.recordingChunks.push(event.data);
+    };
+    state.recorder.onstart = () => {
+      recordingStatus.textContent = "Recording";
+    };
+    state.recorder.onstop = () => {
+      finalizeRecording();
+    };
+    state.recorder.start(1000);
+  } catch {
+    state.recorder = null;
+    recordingStatus.textContent = "Recording unavailable";
+  }
+}
+
+function stopRecording() {
+  if (state.recorder?.state === "recording") {
+    state.recorder.stop();
+  } else {
+    finalizeRecording();
+  }
+}
+
+function finalizeRecording() {
+  if (!state.recordingChunks.length) return;
+  if (state.recordingUrl) URL.revokeObjectURL(state.recordingUrl);
+  state.recordingBlob = new Blob(state.recordingChunks, { type: state.recordingChunks[0]?.type || "video/webm" });
+  state.recordingUrl = URL.createObjectURL(state.recordingBlob);
+  recordingPlayback.src = state.recordingUrl;
+  recordingStatus.textContent = "Ready";
+  reviewPanel.classList.remove("hidden");
 }
 
 function startAudioAnalysis() {
@@ -392,6 +481,7 @@ function addVisionSample(sample) {
   state.samples.push({ ...sample, at: now });
   if (state.samples.length > 600) state.samples.shift();
   Object.assign(sample, computeRecentEyeActivity(sample, now));
+  recordVisionEvent(sample);
 }
 
 function analyzeAudioFrame(buffer, sampleRate) {
@@ -444,6 +534,7 @@ function analyzeAudioFrame(buffer, sampleRate) {
 function addAudioSample(sample) {
   state.audioSamples.push({ ...sample, at: Date.now() });
   if (state.audioSamples.length > 600) state.audioSamples.shift();
+  recordAudioEvent(sample);
 }
 
 function renderAudioSignals(sample) {
@@ -496,6 +587,7 @@ function stopSession() {
   window.clearInterval(state.timerId);
   cancelAnimationFrame(state.visionId);
   cancelAnimationFrame(state.audioId);
+  stopRecording();
   if (wasRunning) showFeedback();
 }
 
@@ -504,6 +596,9 @@ function resetSession() {
   state.transcript = "";
   state.interim = "";
   state.samples = [];
+  state.timelineEvents = [];
+  state.transcriptSegments = [];
+  state.eventCooldowns = {};
   state.lastFrame = null;
   state.lastGazeBias = 0;
   state.lastEyeMid = null;
@@ -520,6 +615,7 @@ function resetSession() {
   state.speechActive = false;
   state.speechBlocked = false;
   state.faceDetector = null;
+  state.recordingChunks = [];
   transcriptEl.textContent = "Your pitch transcript will appear here as you speak.";
   timerEl.textContent = "00:00";
   speechStatus.textContent = "Speech idle";
@@ -535,6 +631,7 @@ function resetSession() {
   pauseSignal.textContent = "--";
   audioFeedback.textContent = "Waiting for microphone";
   clearTrackingOverlay();
+  clearRecordingReview();
   resetDashboard();
   say("Ready when you are. Start with the person who has the problem.", "listening");
 }
@@ -564,8 +661,9 @@ async function showFeedback(source = {}) {
   const wpm = Math.round((words.length / elapsed) * 60);
   const visual = source.visual || summarizeVision();
   const audio = source.audio || summarizeAudio();
+  const timeline = source.timeline || buildTimelineEvents();
   const scores = scoreContent(transcript);
-  const fallback = buildLocalFeedback({ fillers, scores, transcript, visual, audio, wpm });
+  const fallback = buildLocalFeedback({ fillers, scores, transcript, visual, audio, wpm, timeline });
   const feedback = await requestCoachFeedback({
     audience: state.mode,
     transcript,
@@ -576,13 +674,20 @@ async function showFeedback(source = {}) {
     },
     visual,
     audio,
+    timeline,
+    transcriptSegments: state.transcriptSegments.slice(0, 24),
   }, fallback);
 
   renderList(deliveryList, feedback.delivery);
   renderList(contentList, feedback.content);
+  renderTimeline(feedback.performanceNotes || timeline);
+  requestVideoPerformanceNotes({ transcript, timeline, feedback, videoBlob: source.videoBlob }).then((videoNotes) => {
+    if (videoNotes.length) renderTimeline(mergeTimelineNotes(feedback.performanceNotes || timeline, videoNotes));
+  });
   rewriteText.textContent = feedback.suggestedRewrite;
   followupText.textContent = feedback.followupQuestion;
   dashboard.classList.remove("hidden");
+  enableFeedbackChat({ transcript, durationSeconds: elapsed, wpm, fillers: fillers.total, visual, audio, timeline, feedback });
   say(feedback.coachResponse, feedback.coachResponse.startsWith("Pause") ? "confused" : "speaking");
 }
 
@@ -601,7 +706,7 @@ async function requestCoachFeedback(payload, fallback) {
   }
 }
 
-function buildLocalFeedback({ fillers, scores, transcript, visual, audio, wpm }) {
+function buildLocalFeedback({ fillers, scores, transcript, visual, audio, wpm, timeline = [] }) {
   return {
     coachResponse: buildSpokenFeedback(wpm, fillers.total, scores, visual, audio),
     delivery: [
@@ -621,6 +726,7 @@ function buildLocalFeedback({ fillers, scores, transcript, visual, audio, wpm })
       { label: "Impact", value: `${scores.impact}/10`, score: scores.impact / 10 },
       { label: "Call to action", value: scores.cta > 5 ? `${scores.cta}/10` : "missing", score: scores.cta / 10 },
     ],
+    performanceNotes: timeline.length ? timeline : buildGenericTimeline(scores, visual, audio),
     suggestedRewrite: buildRewrite(transcript, scores),
     followupQuestion: audienceCopy[state.mode].followup,
   };
@@ -631,6 +737,7 @@ function normalizeFeedback(feedback, fallback) {
     coachResponse: feedback.coachResponse || fallback.coachResponse,
     delivery: normalizeRows(feedback.delivery, fallback.delivery),
     content: normalizeRows(feedback.content, fallback.content),
+    performanceNotes: normalizePerformanceNotes(feedback.performanceNotes, fallback.performanceNotes),
     suggestedRewrite: feedback.suggestedRewrite || fallback.suggestedRewrite,
     followupQuestion: feedback.followupQuestion || fallback.followupQuestion,
   };
@@ -650,6 +757,325 @@ function normalizeRows(rows, fallbackRows) {
       score: Number.isFinite(Number(row.score)) ? Number(row.score) : fallbackRows[index]?.score ?? 0.5,
     };
   });
+}
+
+function normalizePerformanceNotes(notes, fallbackNotes = []) {
+  if (!Array.isArray(notes) || notes.length === 0) return fallbackNotes;
+  return notes.slice(0, 8).map((note, index) => ({
+    time: Number.isFinite(Number(note.time)) ? Number(note.time) : Number(note.second ?? fallbackNotes[index]?.time ?? 0),
+    type: normalizeNoteType(note.type || fallbackNotes[index]?.type),
+    label: note.label || fallbackNotes[index]?.label || "Review moment",
+    detail: note.detail || note.value || fallbackNotes[index]?.detail || "",
+  }));
+}
+
+function normalizeNoteType(type = "moment") {
+  if (["eye", "wording", "audio", "pause", "posture"].includes(type)) return type;
+  if (["volume", "pitch", "energy"].includes(type)) return "audio";
+  if (["gesture", "movement", "head"].includes(type)) return "posture";
+  return "wording";
+}
+
+async function requestVideoPerformanceNotes(context) {
+  const videoBlob = context.videoBlob || state.recordingBlob;
+  if (!videoBlob || videoBlob.size > 18 * 1024 * 1024) return [];
+
+  try {
+    recordingStatus.textContent = "Gemini video";
+    const videoData = await blobToBase64(videoBlob);
+    const response = await fetch("/api/video-feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mimeType: videoBlob.type || "video/webm",
+        videoData,
+        context: {
+          audience: state.mode,
+          transcript: context.transcript,
+          timeline: context.timeline,
+          feedback: context.feedback,
+          transcriptSegments: state.transcriptSegments.slice(0, 24),
+        },
+      }),
+    });
+
+    if (!response.ok) throw new Error(`Video feedback returned ${response.status}`);
+    const result = await response.json();
+    recordingStatus.textContent = result.source === "llm" ? "Gemini video" : "Ready";
+    return normalizePerformanceNotes(result.performanceNotes, []);
+  } catch {
+    recordingStatus.textContent = "Ready";
+    return [];
+  }
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || "").split(",")[1] || "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+function mergeTimelineNotes(primary = [], secondary = []) {
+  const merged = [...normalizePerformanceNotes(primary, []), ...normalizePerformanceNotes(secondary, [])];
+  const seen = new Set();
+  return merged
+    .sort((a, b) => a.time - b.time)
+    .filter((note) => {
+      const key = `${Math.round(note.time)}:${note.type}:${note.label}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 10);
+}
+
+function enableFeedbackChat(context) {
+  state.lastFeedbackContext = {
+    audience: state.mode,
+    transcript: context.transcript,
+    durationSeconds: context.durationSeconds,
+    delivery: {
+      wordsPerMinute: context.wpm,
+      fillerWords: context.fillers,
+      visual: context.visual,
+      audio: context.audio,
+    },
+    timeline: context.timeline,
+    transcriptSegments: state.transcriptSegments.slice(0, 24),
+    feedback: context.feedback,
+  };
+  state.chatHistory = [];
+  chatMessages.innerHTML = "";
+  appendChatMessage("assistant", "Ask me anything about this feedback, or ask for a stronger rewrite.");
+  chatPanel.classList.remove("hidden");
+  setChatStatus("Gemini ready");
+  chatInput.disabled = false;
+  chatSendBtn.disabled = false;
+}
+
+async function handleChatSubmit(event) {
+  event.preventDefault();
+  const question = chatInput.value.trim();
+  if (!question || !state.lastFeedbackContext) return;
+
+  chatInput.value = "";
+  appendChatMessage("user", question);
+  setChatStatus("Thinking", true);
+  chatInput.disabled = true;
+  chatSendBtn.disabled = true;
+
+  try {
+    const result = await requestFeedbackChat(question);
+    const answer = result.answer || "I could not generate a follow-up answer. Try asking in a simpler way.";
+    appendChatMessage("assistant", answer);
+    state.chatHistory.push({ role: "user", content: question }, { role: "assistant", content: answer });
+    setChatStatus(result.source === "llm" ? "Gemini" : result.source === "feedback-fallback" ? "Gemini fallback" : "Local");
+  } catch (error) {
+    const answer = error?.message || "I could not reach Gemini for this follow-up. Try again after checking the server.";
+    appendChatMessage("assistant", answer);
+    state.chatHistory.push({ role: "user", content: question }, { role: "assistant", content: answer });
+    setChatStatus("Chat unavailable");
+  } finally {
+    chatInput.disabled = false;
+    chatSendBtn.disabled = false;
+    chatInput.focus();
+  }
+}
+
+function setChatStatus(text, loading = false) {
+  chatStatus.textContent = text;
+  chatStatus.classList.toggle("loading", loading);
+}
+
+async function requestFeedbackChat(question) {
+  const chatPayload = {
+    question,
+    context: state.lastFeedbackContext,
+    history: state.chatHistory.slice(-8),
+  };
+  const response = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(chatPayload),
+  });
+
+  if (response.ok) return response.json();
+  if (![404, 405].includes(response.status)) {
+    throw new Error(`Chat API returned ${response.status}. Check the Node server terminal.`);
+  }
+
+  const fallbackResponse = await fetch("/api/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      audience: state.lastFeedbackContext?.audience || state.mode,
+      transcript: [
+        "This is a follow-up coaching chat, not a new pitch.",
+        `User question: ${question}`,
+        `Previous pitch transcript: ${state.lastFeedbackContext?.transcript || ""}`,
+        `Previous feedback: ${JSON.stringify(state.lastFeedbackContext?.feedback || {})}`,
+      ].join("\n\n"),
+      durationSeconds: state.lastFeedbackContext?.durationSeconds || 60,
+      delivery: state.lastFeedbackContext?.delivery || {},
+      visual: state.lastFeedbackContext?.delivery?.visual || {},
+      audio: state.lastFeedbackContext?.delivery?.audio || {},
+      timeline: state.lastFeedbackContext?.timeline || [],
+      transcriptSegments: state.lastFeedbackContext?.transcriptSegments || [],
+    }),
+  });
+
+  if (!fallbackResponse.ok) throw new Error(`Feedback fallback returned ${fallbackResponse.status}. Check the Node server terminal.`);
+  const feedback = await fallbackResponse.json();
+  return {
+    answer: feedback.coachResponse || feedback.suggestedRewrite || "Try focusing on one specific improvement from the feedback.",
+    source: feedback.source === "llm" ? "feedback-fallback" : "local",
+  };
+}
+
+function appendChatMessage(role, text) {
+  const message = document.createElement("p");
+  message.className = `chat-message ${role}`;
+  message.textContent = text;
+  chatMessages.appendChild(message);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function recordTranscriptSegment(text) {
+  const cleanText = text.trim();
+  if (!cleanText) return;
+  const time = getElapsedSeconds();
+  state.transcriptSegments.push({ time, text: cleanText });
+
+  const lower = cleanText.toLowerCase();
+  const weakTerms = ["basically", "kind of", "sort of", "thing", "stuff", "you know"];
+  const matchedWeakTerm = weakTerms.find((term) => lower.includes(term));
+  if (matchedWeakTerm) {
+    addTimelineEvent("wording", time, "Loose wording", `"${matchedWeakTerm}" can sound vague here. Replace it with a specific user, problem, or result.`);
+  }
+  if (/\bgive me\b|\bi will listen\b|\blistening for\b/.test(lower)) {
+    addTimelineEvent("wording", time, "Prompt-like phrasing", "This sounds like instructions to the coach rather than your actual pitch opening.");
+  }
+}
+
+function recordVisionEvent(sample) {
+  const level = effectiveEyeLevel(sample);
+  if (sample.faceDetectorActive && !sample.faceDetected) {
+    addTimelineEvent("eye", getElapsedSeconds(), "Face left frame", "The tracker lost your face here. Re-center before the next key point.", 5);
+    return;
+  }
+  if (!sample.isBlinking && (level > 0.3 || sample.recentAlert)) {
+    const direction = sample.horizontalBias > 0 ? "camera right" : "camera left";
+    addTimelineEvent("eye", getElapsedSeconds(), "Eye drift", `Your eye line drifted toward ${direction}. Re-lock on the lens for the next sentence.`, 4);
+  }
+}
+
+function recordAudioEvent(sample) {
+  const time = getElapsedSeconds();
+  if (sample.voiced && volumeScore(sample.db) < 0.38) {
+    addTimelineEvent("audio", time, "Low volume", "Your voice dropped here. Add a little more projection on the next sentence.", 5);
+  }
+  if (sample.voiced && sample.pitchHz > 0 && pitchScore(sample) < 0.38) {
+    addTimelineEvent("audio", time, "Flat tone", "Pitch variation was low here. Lift the key phrase so it sounds more intentional.", 6);
+  }
+  if (!sample.voiced && state.recentPauseMs > 1100) {
+    addTimelineEvent("pause", time, "Long pause", "This pause may feel long unless it follows a major point.", 6);
+  }
+}
+
+function addTimelineEvent(type, time, label, detail, cooldownSeconds = 3) {
+  const rounded = Math.max(0, Math.round(time));
+  const key = `${type}:${label}`;
+  if (rounded - (state.eventCooldowns[key] ?? -Infinity) < cooldownSeconds) return;
+  state.eventCooldowns[key] = rounded;
+  state.timelineEvents.push({ type, time: rounded, label, detail });
+  if (state.timelineEvents.length > 36) state.timelineEvents.shift();
+}
+
+function buildTimelineEvents() {
+  const events = [...state.timelineEvents];
+  if (!events.length && state.transcriptSegments.length) {
+    const first = state.transcriptSegments[0];
+    events.push({
+      type: "wording",
+      time: first.time,
+      label: "Opening line",
+      detail: `Review this opening: "${first.text.slice(0, 110)}"`,
+    });
+  }
+  return events
+    .sort((a, b) => a.time - b.time)
+    .filter((event, index, list) => index === 0 || event.time !== list[index - 1].time || event.label !== list[index - 1].label)
+    .slice(0, 8);
+}
+
+function buildGenericTimeline(scores, visual, audio) {
+  const notes = [];
+  if (scores.problem < 6) notes.push({ type: "wording", time: 5, label: "Problem clarity", detail: "The opening needs a clearer user pain point." });
+  if (visual.eyeScore < 0.55) notes.push({ type: "eye", time: 12, label: "Eye contact", detail: "Review this section for eye drift and re-lock on the lens." });
+  if (audio.volumeScore < 0.45) notes.push({ type: "audio", time: 18, label: "Volume", detail: "Voice energy sounded low around this part." });
+  if (audio.pitchScore < 0.45) notes.push({ type: "audio", time: 24, label: "Pitch variation", detail: "Add more vocal lift on the key idea." });
+  return notes;
+}
+
+function renderTimeline(notes) {
+  const normalized = normalizePerformanceNotes(notes, []);
+  eventTimeline.innerHTML = "";
+  timelineStatus.textContent = normalized.length ? `${normalized.length} moments` : "No moments";
+  reviewPanel.classList.remove("hidden");
+  hideMomentDetail();
+
+  if (!normalized.length) {
+    return;
+  }
+
+  const duration = Math.max(recordingPlayback.duration || state.lastFeedbackContext?.durationSeconds || getElapsedSeconds() || 60, 1);
+  normalized.forEach((note) => {
+    const button = document.createElement("button");
+    button.className = `timeline-marker ${note.type}`;
+    button.type = "button";
+    button.style.left = `${Math.min(Math.max((Number(note.time) / duration) * 100, 1), 99)}%`;
+    button.setAttribute("aria-label", `${formatTime(Math.round(note.time))} ${note.label}`);
+    button.addEventListener("mouseenter", () => showMomentDetail(note));
+    button.addEventListener("focus", () => showMomentDetail(note));
+    button.addEventListener("mouseleave", hideMomentDetail);
+    button.addEventListener("blur", hideMomentDetail);
+    button.addEventListener("click", () => {
+      if (recordingPlayback.src) {
+        recordingPlayback.pause();
+        recordingPlayback.currentTime = Math.max(0, Math.min(Number(note.time), duration));
+      }
+      showMomentDetail(note);
+    });
+    eventTimeline.appendChild(button);
+  });
+}
+
+function showMomentDetail(note) {
+  momentDetail.classList.remove("hidden");
+  momentTitle.textContent = `${formatTime(Math.round(note.time))} ${note.label}`;
+  momentText.textContent = note.detail;
+}
+
+function hideMomentDetail() {
+  momentDetail.classList.add("hidden");
+  momentTitle.textContent = "";
+  momentText.textContent = "";
+}
+
+function clearRecordingReview() {
+  reviewPanel.classList.add("hidden");
+  eventTimeline.innerHTML = "";
+  hideMomentDetail();
+  timelineStatus.textContent = "Waiting";
+  recordingStatus.textContent = "No recording";
+  recordingPlayback.removeAttribute("src");
+  recordingPlayback.load();
+  if (state.recordingUrl && state.recordingUrl !== state.uploadUrl) URL.revokeObjectURL(state.recordingUrl);
+  state.recordingUrl = "";
+  state.recordingBlob = null;
 }
 
 function handleUploadFile() {
@@ -687,6 +1113,7 @@ function handleUploadFile() {
     mediaPreview.appendChild(media);
     mediaPreview.classList.remove("hidden");
     state.uploadMedia = media;
+    state.uploadFileBlob = file;
     media.addEventListener("loadedmetadata", () => {
       state.uploadDuration = Number.isFinite(media.duration) ? Math.max(Math.round(media.duration), 1) : 60;
       syncUploadControls();
@@ -699,8 +1126,9 @@ function handleUploadFile() {
 
 async function analyzeUpload() {
   const transcript = uploadTranscript.value.trim();
+  const isVideoUpload = state.uploadMedia?.tagName === "VIDEO" && state.uploadFileBlob;
 
-  if (!transcript) {
+  if (!transcript && !isVideoUpload) {
     say("I need a transcript for content feedback. Paste the words from the pitch, then analyze again.", "confused");
     uploadTranscript.focus();
     return;
@@ -708,14 +1136,24 @@ async function analyzeUpload() {
 
   state.transcript = transcript;
   state.interim = "";
-  transcriptEl.textContent = transcript;
+  state.timelineEvents = [];
+  state.transcriptSegments = transcript ? [{ time: 0, text: transcript }] : [];
+  state.eventCooldowns = {};
+  transcriptEl.textContent = transcript || "Video uploaded. Gemini will review the recording directly.";
   speechStatus.textContent = "Upload analyzed";
 
-  const visual = await summarizeUploadVisual();
+  if (isVideoUpload) {
+    await prepareUploadedVideoReview();
+  }
+
+  const visual = isVideoUpload ? await analyzeUploadedVideoTimeline() : await summarizeUploadVisual();
+  const uploadTimeline = buildTimelineEvents();
   showFeedback({
-    transcript,
+    transcript: transcript || "Uploaded video without transcript. Review the video for delivery, eye contact, vocal energy, pauses, and visible presentation issues.",
     durationSeconds: state.uploadDuration || estimateDurationFromTranscript(transcript),
     visual,
+    timeline: uploadTimeline,
+    videoBlob: state.uploadFileBlob,
   });
 }
 
@@ -739,6 +1177,86 @@ async function summarizeUploadVisual() {
   }
 }
 
+async function prepareUploadedVideoReview() {
+  if (!state.uploadFileBlob || !state.uploadUrl) return;
+  if (state.recordingUrl) URL.revokeObjectURL(state.recordingUrl);
+  state.recordingBlob = state.uploadFileBlob;
+  state.recordingUrl = state.uploadUrl;
+  recordingPlayback.src = state.uploadUrl;
+  recordingStatus.textContent = "Upload ready";
+  reviewPanel.classList.remove("hidden");
+}
+
+async function analyzeUploadedVideoTimeline() {
+  const media = state.uploadMedia;
+  if (!media || media.tagName !== "VIDEO") {
+    return { eye: "not measured", eyeScore: 0.45, movement: "not measured", movementScore: 0.45 };
+  }
+
+  const duration = Number.isFinite(media.duration) ? Math.max(media.duration, 1) : state.uploadDuration || 60;
+  const sampleTimes = Array.from({ length: Math.min(8, Math.ceil(duration / 8)) }, (_, index) => {
+    const ratio = (index + 1) / (Math.min(8, Math.ceil(duration / 8)) + 1);
+    return Math.min(Math.max(duration * ratio, 0.5), duration - 0.25);
+  });
+  const samples = [];
+
+  for (const time of sampleTimes) {
+    try {
+      await seekMedia(media, time);
+      ctx.drawImage(media, 0, 0, canvas.width, canvas.height);
+      const sample = await analyzeFrame(ctx.getImageData(0, 0, canvas.width, canvas.height));
+      samples.push(sample);
+      recordUploadVisionEvent(sample, time);
+    } catch {
+      // Skip frames that cannot be decoded.
+    }
+  }
+
+  if (!samples.length) {
+    return { eye: "not measured", eyeScore: 0.45, movement: "not measured", movementScore: 0.45 };
+  }
+
+  const average = (key) => samples.reduce((sum, sample) => sum + (sample[key] || 0), 0) / samples.length;
+  const drift = average("drift");
+  const movement = average("movement");
+  return {
+    eye: drift < 0.22 ? "steady lock" : drift < 0.45 ? "small scans" : "noticeable drift",
+    eyeScore: Math.max(0, Math.min(1 - drift * 0.85, 1)),
+    movement: movement > 0.3 ? "expressive" : movement > 0.12 ? "natural" : "flat ending",
+    movementScore: Math.min(movement * 2.4, 1),
+  };
+}
+
+function seekMedia(media, time) {
+  return new Promise((resolve, reject) => {
+    const handleSeeked = () => {
+      media.removeEventListener("seeked", handleSeeked);
+      media.removeEventListener("error", handleError);
+      resolve();
+    };
+    const handleError = () => {
+      media.removeEventListener("seeked", handleSeeked);
+      media.removeEventListener("error", handleError);
+      reject(new Error("Media seek failed"));
+    };
+    media.addEventListener("seeked", handleSeeked, { once: true });
+    media.addEventListener("error", handleError, { once: true });
+    media.currentTime = time;
+  });
+}
+
+function recordUploadVisionEvent(sample, time) {
+  if (sample.faceDetectorActive && !sample.faceDetected) {
+    addTimelineEvent("eye", time, "Face left frame", "The tracker could not find your face at this point in the uploaded video.", 4);
+    return;
+  }
+  const level = effectiveEyeLevel(sample);
+  if (!sample.isBlinking && level > 0.28) {
+    const direction = sample.horizontalBias > 0 ? "camera right" : "camera left";
+    addTimelineEvent("eye", time, "Eye drift", `Your eye line appears to drift toward ${direction} in this uploaded clip.`, 4);
+  }
+}
+
 function clearUpload() {
   uploadFile.value = "";
   uploadTranscript.value = "";
@@ -752,6 +1270,7 @@ function clearUploadPreview() {
   if (state.uploadUrl) URL.revokeObjectURL(state.uploadUrl);
   state.uploadUrl = "";
   state.uploadMedia = null;
+  state.uploadFileBlob = null;
   mediaPreview.innerHTML = "";
   mediaPreview.classList.add("hidden");
 }
@@ -953,15 +1472,14 @@ function renderTrackingOverlay(sample) {
   if (!overlayCtx) return;
 
   overlayCtx.clearRect(0, 0, trackingOverlay.width, trackingOverlay.height);
+  if (!state.overlayVisible) return;
+
   if (sample.faceDetectorActive && !sample.faceDetected) {
     overlayCtx.strokeStyle = "#94a3b8";
     overlayCtx.lineWidth = 1.2;
     overlayCtx.setLineDash([6, 6]);
     overlayCtx.strokeRect(trackingOverlay.width * 0.3, trackingOverlay.height * 0.16, trackingOverlay.width * 0.4, trackingOverlay.height * 0.56);
     overlayCtx.setLineDash([]);
-    overlayCtx.fillStyle = "#e2e8f0";
-    overlayCtx.font = "700 11px Inter, sans-serif";
-    overlayCtx.fillText("SEARCHING FOR FACE", trackingOverlay.width * 0.3, trackingOverlay.height * 0.14);
     return;
   }
 
@@ -984,14 +1502,20 @@ function renderTrackingOverlay(sample) {
   overlayCtx.lineTo(sample.focusX, sample.focusY + 10);
   overlayCtx.stroke();
 
-  overlayCtx.fillStyle = stroke;
-  overlayCtx.font = "700 11px Inter, sans-serif";
-  overlayCtx.fillText(`EYE ${eyeMovementLabel(sample).toUpperCase()}`, x, Math.max(14, y - 6));
 }
 
 function clearTrackingOverlay() {
   if (!overlayCtx) return;
   overlayCtx.clearRect(0, 0, trackingOverlay.width, trackingOverlay.height);
+}
+
+function toggleTrackingOverlay() {
+  state.overlayVisible = !state.overlayVisible;
+  trackingOverlay.classList.toggle("hidden-overlay", !state.overlayVisible);
+  trackingToggle.classList.toggle("active", state.overlayVisible);
+  trackingToggle.setAttribute("aria-pressed", String(state.overlayVisible));
+  trackingToggle.textContent = state.overlayVisible ? "Face bar" : "Face bar off";
+  if (!state.overlayVisible) clearTrackingOverlay();
 }
 
 function computeRecentEyeActivity(sample, now) {
@@ -1405,10 +1929,18 @@ function setAvatarState(expression = "listening", talking = false) {
 
 function resetDashboard() {
   dashboard.classList.add("hidden");
+  chatPanel.classList.add("hidden");
   deliveryList.innerHTML = "";
   contentList.innerHTML = "";
   rewriteText.textContent = "";
   followupText.textContent = "";
+  chatMessages.innerHTML = "";
+  setChatStatus("Ready after feedback");
+  chatInput.value = "";
+  chatInput.disabled = true;
+  chatSendBtn.disabled = true;
+  state.lastFeedbackContext = null;
+  state.chatHistory = [];
   coachMessage.dataset.interrupted = "";
 }
 
