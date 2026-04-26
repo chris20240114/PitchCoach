@@ -111,7 +111,8 @@ No `npm install` is required for the current dependency-free server.
 ### Current MVP
 - Browser speech recognition for live transcript capture
 - Browser speech synthesis for spoken coach feedback
-- Webcam-based visual heuristics for camera presence, lighting, and movement
+- Webcam-based visual heuristics plus a face tracking overlay for camera presence, eye movement, face position, lighting, and head movement
+- Live microphone analysis for volume, vocal energy, pitch range, and pause rhythm
 - Session timeline with timestamped transcript chunks, live coach events, audio summary, and visual samples
 - Deterministic pitch scoring for pace, filler words, problem clarity, user specificity, demo clarity, impact, and call to action
 - General-purpose presentation context for pitches, class presentations, interviews, sales demos, team updates, teaching, and speeches
