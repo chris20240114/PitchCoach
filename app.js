@@ -20,6 +20,7 @@ const eyeSignal = document.querySelector("#eyeSignal");
 const positionSignal = document.querySelector("#positionSignal");
 const lightingSignal = document.querySelector("#lightingSignal");
 const movementSignal = document.querySelector("#movementSignal");
+const coachSignal = document.querySelector("#coachSignal");
 const presentationType = document.querySelector("#presentationType");
 const audienceType = document.querySelector("#audienceType");
 const coachingIntensity = document.querySelector("#coachingIntensity");
@@ -40,6 +41,7 @@ const state = {
   },
   stream: null,
   recognition: null,
+  listeningPausedForCoach: false,
   startedAt: 0,
   timerId: null,
   visionId: null,
@@ -48,6 +50,12 @@ const state = {
   samples: [],
   transcriptEvents: [],
   liveEvents: [],
+  interruption: {
+    lastAtSeconds: -999,
+    offTrackHits: 0,
+    technicalHits: 0,
+    lastReason: "",
+  },
   lastFrame: null,
   uploadUrl: "",
   uploadDuration: 60,
@@ -73,6 +81,7 @@ async function startSession() {
   state.samples = [];
   state.transcriptEvents = [];
   state.liveEvents = [];
+  resetInterruptionState();
   state.startedAt = Date.now();
   transcriptEl.textContent = "";
   startBtn.disabled = true;
@@ -83,7 +92,7 @@ async function startSession() {
   startSpeech();
   startTimer();
   startVisionLoop();
-  say(buildStartMessage(), "nodding");
+  showCoachText(buildStartMessage(), "nodding");
 }
 
 function updateContext() {
@@ -169,7 +178,7 @@ function startSpeech() {
   };
 
   recognition.onend = () => {
-    if (stopBtn.disabled === false) {
+    if (stopBtn.disabled === false && !state.listeningPausedForCoach) {
       try {
         recognition.start();
       } catch {
@@ -263,6 +272,7 @@ function setMetric(element, text, score) {
 
 function stopSession() {
   const wasRunning = stopBtn.disabled === false;
+  state.listeningPausedForCoach = false;
 
   if (state.interim.trim()) {
     state.transcript = `${state.transcript} ${state.interim}`.trim();
@@ -290,6 +300,7 @@ function resetSession() {
   if (stopBtn.disabled === false) stopSession();
   state.transcript = "";
   state.interim = "";
+  state.listeningPausedForCoach = false;
   state.samples = [];
   state.lastFrame = null;
   transcriptEl.textContent = "Your pitch transcript will appear here as you speak.";
@@ -300,6 +311,8 @@ function resetSession() {
   positionSignal.textContent = "--";
   lightingSignal.textContent = "--";
   movementSignal.textContent = "--";
+  coachSignal.textContent = "waiting";
+  coachSignal.className = "";
   resetDashboard();
   say("Ready when you are. Start with the person who has the problem.", "listening");
 }
@@ -314,16 +327,123 @@ function maybeInterrupt() {
 
   const elapsed = getElapsedSeconds();
   const text = `${state.transcript} ${state.interim}`.toLowerCase();
+  const wordCount = (text.match(/\b[\w'-]+\b/g) || []).length;
+  const thresholds = getInterruptionThresholds();
+
+  if (elapsed < thresholds.minSeconds || wordCount < thresholds.minWords) return;
+  if (elapsed - state.interruption.lastAtSeconds < thresholds.cooldownSeconds) return;
+
   const technicalOpen = /\b(api|model|infrastructure|stack|database|framework|algorithm|multimodal)\b/.test(text);
   const humanWords = /\b(student|founder|user|customer|teacher|developer|patient|team|people)\b/.test(text);
-  const canInterruptEarly = state.context.coachingIntensity === "interrupt" ? elapsed > 8 : elapsed > 14;
+  const offTrack = detectOffTrack(text);
 
-  if (canInterruptEarly && elapsed < 32 && technicalOpen && !humanWords && !coachMessage.dataset.interrupted) {
-    coachMessage.dataset.interrupted = "true";
-    const message = "Pause. I am hearing the build, but not the person. Who struggles with this, and why now?";
-    state.liveEvents.push({ atSeconds: elapsed, type: "interruption", message });
-    say(message, "confused");
+  if (offTrack) {
+    setMetric(coachSignal, "possible tangent", 0.35);
+    state.interruption.offTrackHits = offTrack.reason === state.interruption.lastReason ? state.interruption.offTrackHits + 1 : 1;
+    state.interruption.technicalHits = 0;
+    state.interruption.lastReason = offTrack.reason;
+
+    if (state.interruption.offTrackHits >= thresholds.requiredHits) {
+      const message = buildOffTrackInterruption(offTrack);
+      recordInterruption(elapsed, "off-track-interruption", offTrack.reason, message);
+      interruptWithCoachSpeech(message);
+    }
+    return;
   }
+
+  if (technicalOpen && !humanWords) {
+    setMetric(coachSignal, "too technical", 0.45);
+    state.interruption.technicalHits += 1;
+    state.interruption.offTrackHits = 0;
+    state.interruption.lastReason = "too-technical";
+
+    if (state.interruption.technicalHits >= thresholds.requiredHits) {
+      const message = "Pause. I am hearing the build, but not the person. Who struggles with this, and why now?";
+      recordInterruption(elapsed, "technical-interruption", "too-technical", message);
+      interruptWithCoachSpeech(message);
+    }
+    return;
+  }
+
+  decayInterruptionEvidence();
+  setMetric(coachSignal, "on track", 0.8);
+}
+
+function getInterruptionThresholds() {
+  if (state.context.coachingIntensity === "interrupt") {
+    return { minSeconds: 10, minWords: 22, requiredHits: 2, cooldownSeconds: 22 };
+  }
+
+  return { minSeconds: 16, minWords: 32, requiredHits: 2, cooldownSeconds: 30 };
+}
+
+function recordInterruption(elapsed, type, reason, message) {
+  state.interruption.lastAtSeconds = elapsed;
+  state.interruption.offTrackHits = 0;
+  state.interruption.technicalHits = 0;
+  state.interruption.lastReason = "";
+  state.liveEvents.push({ atSeconds: elapsed, type, reason, message });
+}
+
+function decayInterruptionEvidence() {
+  state.interruption.offTrackHits = Math.max(0, state.interruption.offTrackHits - 1);
+  state.interruption.technicalHits = Math.max(0, state.interruption.technicalHits - 1);
+  if (!state.interruption.offTrackHits && !state.interruption.technicalHits) {
+    state.interruption.lastReason = "";
+  }
+}
+
+function resetInterruptionState() {
+  state.interruption = {
+    lastAtSeconds: -999,
+    offTrackHits: 0,
+    technicalHits: 0,
+    lastReason: "",
+  };
+}
+
+function detectOffTrack(text) {
+  const hasPresentationFrame = /\b(presenting|presentation|pitch|project|topic|today|talking about|speaking about)\b/.test(text);
+  const politicalDetour = /\b(donald trump|joe biden|republican|democrat|maga|election|politics|president)\b/.test(text);
+  const celebrityDetour = /\b(taylor swift|kanye|celebrity|movie star|famous actor)\b/.test(text);
+  const personalDetour = /\b(i love|i hate|my favorite|randomly|anyway)\b/.test(text);
+  const presentationKeywords = expectedTopicKeywords(state.context.presentationType);
+  const topicMatches = presentationKeywords.filter((keyword) => text.includes(keyword)).length;
+  const enoughWords = (text.match(/\b[\w'-]+\b/g) || []).length > 12;
+
+  if (hasPresentationFrame && politicalDetour) {
+    return { reason: "political-detour", severity: "high" };
+  }
+
+  if (hasPresentationFrame && (celebrityDetour || personalDetour) && enoughWords && topicMatches < 2) {
+    return { reason: "personal-detour", severity: "medium" };
+  }
+
+  return null;
+}
+
+function buildOffTrackInterruption(offTrack) {
+  if (offTrack.reason === "political-detour") {
+    return "Pause. That sounds off track for this presentation. Bring it back to your project, the audience problem, and the point you want them to remember.";
+  }
+
+  return "Pause. I am losing the thread. Connect this back to your main point, or cut it and return to the audience problem.";
+}
+
+function expectedTopicKeywords(type) {
+  const shared = ["problem", "audience", "point", "example", "impact", "because", "solution"];
+  const byType = {
+    pitch: ["project", "product", "user", "customer", "demo", "market", "need"],
+    "class-presentation": ["topic", "definition", "concept", "evidence", "argument", "lesson"],
+    "interview-answer": ["experience", "example", "tradeoff", "team", "result", "learned"],
+    "sales-demo": ["customer", "pain", "workflow", "demo", "value", "next step"],
+    "team-update": ["status", "progress", "risk", "blocker", "next", "timeline"],
+    teaching: ["concept", "definition", "example", "students", "learn", "remember"],
+    speech: ["story", "message", "audience", "moment", "thanks", "remember"],
+    custom: [],
+  };
+
+  return [...shared, ...(byType[type] || [])];
 }
 
 async function showFeedback(source = {}) {
@@ -519,6 +639,7 @@ function analyzeUpload() {
   state.interim = "";
   state.transcriptEvents = [{ atSeconds: 0, text: transcript, type: "upload" }];
   state.liveEvents = [];
+  resetInterruptionState();
   transcriptEl.textContent = transcript;
   speechStatus.textContent = "Upload analyzed";
 
@@ -677,11 +798,53 @@ function renderList(target, rows) {
   });
 }
 
-function say(message, expression) {
+function showCoachText(message, expression) {
+  coachMessage.textContent = message;
+  avatar.className = `avatar ${expression}`;
+}
+
+function interruptWithCoachSpeech(message) {
+  pauseRecognitionForCoach();
+  say(message, "confused", { resumeRecognition: true });
+}
+
+function pauseRecognitionForCoach() {
+  if (!state.recognition || stopBtn.disabled) return;
+
+  state.listeningPausedForCoach = true;
+  speechStatus.textContent = "Coach speaking";
+
+  try {
+    state.recognition.stop();
+  } catch {
+    state.listeningPausedForCoach = false;
+  }
+}
+
+function resumeRecognitionAfterCoach() {
+  if (!state.recognition || stopBtn.disabled) {
+    state.listeningPausedForCoach = false;
+    return;
+  }
+
+  state.listeningPausedForCoach = false;
+  speechStatus.textContent = "Listening";
+
+  try {
+    state.recognition.start();
+  } catch {
+    speechStatus.textContent = "Speech paused";
+  }
+}
+
+function say(message, expression, options = {}) {
   coachMessage.textContent = message;
   avatar.className = `avatar ${expression}`;
 
-  if (!("speechSynthesis" in window)) return;
+  if (!("speechSynthesis" in window)) {
+    if (options.resumeRecognition) resumeRecognitionAfterCoach();
+    return;
+  }
 
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(message);
@@ -689,6 +852,10 @@ function say(message, expression) {
   utterance.pitch = 0.95;
   utterance.onend = () => {
     if (avatar.classList.contains("speaking")) avatar.className = "avatar listening";
+    if (options.resumeRecognition) resumeRecognitionAfterCoach();
+  };
+  utterance.onerror = () => {
+    if (options.resumeRecognition) resumeRecognitionAfterCoach();
   };
   window.speechSynthesis.speak(utterance);
 }
@@ -699,7 +866,6 @@ function resetDashboard() {
   contentList.innerHTML = "";
   rewriteText.textContent = "";
   followupText.textContent = "";
-  coachMessage.dataset.interrupted = "";
 }
 
 function getElapsedSeconds() {
