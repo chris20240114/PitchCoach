@@ -112,6 +112,42 @@ h2 {
   box-shadow: 0 5px 18px rgba(15, 23, 42, 0.08);
 }
 
+.setup-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 18px;
+  padding: 14px;
+}
+
+.setup-panel label {
+  display: grid;
+  gap: 6px;
+}
+
+.setup-panel span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+select {
+  appearance: none;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+  min-height: 42px;
+  padding: 0 12px;
+  width: 100%;
+}
+
 .stage {
   display: grid;
   gap: 18px;
@@ -416,6 +452,7 @@ textarea {
   }
 
   .topbar,
+  .setup-panel,
   .stage,
   .lower-grid,
   .upload-grid,

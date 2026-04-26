@@ -90,42 +90,91 @@ async function handleFeedback(request, response) {
   const payload = await readJsonBody(request);
   const fallback = buildFallbackFeedback(payload);
 
-  if (!process.env.LLM_API_URL || !process.env.LLM_API_KEY || !process.env.LLM_MODEL) {
-    sendJson(response, 200, { ...fallback, source: "local" });
-    return;
-  }
-
   try {
-    const llmFeedback = await requestLlmFeedback(payload);
-    sendJson(response, 200, { ...fallback, ...llmFeedback, source: "llm" });
+    if (process.env.GEMINI_API_KEY) {
+      const geminiFeedback = await requestGeminiFeedback(payload);
+      sendJson(response, 200, { ...fallback, ...geminiFeedback, source: "gemini" });
+      return;
+    }
+
+    if (process.env.OPENAI_API_KEY) {
+      const openAiFeedback = await requestOpenAiFeedback(payload);
+      sendJson(response, 200, { ...fallback, ...openAiFeedback, source: "openai" });
+      return;
+    }
+
+    sendJson(response, 200, { ...fallback, source: "local" });
   } catch (error) {
-    console.error("LLM feedback failed:", error);
-    sendJson(response, 200, { ...fallback, source: "local", warning: "LLM unavailable; used local fallback." });
+    console.error("AI feedback failed:", error);
+    sendJson(response, 200, { ...fallback, source: "local", warning: "AI provider unavailable; used local fallback." });
   }
 }
 
-async function requestLlmFeedback(payload) {
-  const prompt = [
-    "You are PitchMirror, a direct but constructive AI presentation coach.",
-    "Evaluate this pitch using the supplied transcript and delivery signals.",
-    "Return only JSON with keys: coachResponse, delivery, content, suggestedRewrite, followupQuestion.",
-    "delivery and content must be arrays of objects with label, value, and score from 0 to 1.",
-    "Do not overclaim emotion detection. Mention visual signals only as observable behavior.",
-    "",
-    JSON.stringify(payload, null, 2),
-  ].join("\n");
-
-  const result = await fetch(process.env.LLM_API_URL, {
+async function requestGeminiFeedback(payload) {
+  const prompt = buildCoachPrompt(payload);
+  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  const result = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${process.env.LLM_API_KEY}`,
+      "Content-Type": "application/json",
+      "x-goog-api-key": process.env.GEMINI_API_KEY,
+    },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: prompt }],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.4,
+        responseMimeType: "application/json",
+        responseSchema: geminiFeedbackSchema,
+      },
+    }),
+  });
+
+  if (!result.ok) {
+    const body = await result.text();
+    throw new Error(`Gemini request failed with ${result.status}: ${body}`);
+  }
+
+  const data = await result.json();
+  const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim();
+
+  if (!text) {
+    throw new Error("Gemini response did not include JSON text.");
+  }
+
+  return JSON.parse(text);
+}
+
+async function requestOpenAiFeedback(payload) {
+  const prompt = buildCoachPrompt(payload);
+
+  const result = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: process.env.LLM_MODEL,
-      messages: [{ role: "user", content: prompt }],
+      model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
+      input: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
       temperature: 0.4,
-      response_format: { type: "json_object" },
+      text: {
+        format: {
+          type: "json_schema",
+          name: "pitchmirror_feedback",
+          strict: true,
+          schema: feedbackSchema,
+        },
+      },
     }),
   });
 
@@ -134,13 +183,109 @@ async function requestLlmFeedback(payload) {
   }
 
   const data = await result.json();
-  const text = data.choices?.[0]?.message?.content || data.output_text;
+  const text = extractResponseText(data);
 
   if (!text) {
     throw new Error("LLM response did not include JSON text.");
   }
 
   return JSON.parse(text);
+}
+
+function buildCoachPrompt(payload) {
+  return [
+    "You are PitchMirror, a direct but constructive AI presentation coach.",
+    "Evaluate the user's practice presentation using the supplied context, transcript, delivery signals, and session timeline.",
+    "Return coaching that feels like a real audience member, not a generic report.",
+    "Use short, specific feedback. Mention only observable delivery signals.",
+    "Do not diagnose emotions. You may describe observable expression, gaze, head position, posture, pacing, and energy changes.",
+    "For avatarState, choose listening, nodding, confused, or speaking.",
+    "Adapt criteria to the presentation type and audience. A pitch needs problem and impact; a class presentation needs definitions and structure; an interview answer needs evidence and tradeoffs; a sales demo needs customer pain and next step.",
+    "Use timeline observations when helpful, especially changes near the opening, strongest point, and ending.",
+    "Prioritize: audience fit, message clarity, structure, specificity, evidence, pacing, filler words, gaze, head movement, face visibility, and ending strength.",
+    "",
+    JSON.stringify(payload, null, 2),
+  ].join("\n");
+}
+
+const metricSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    label: { type: "string" },
+    value: { type: "string" },
+    score: { type: "number", minimum: 0, maximum: 1 },
+  },
+  required: ["label", "value", "score"],
+};
+
+const feedbackSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    coachResponse: { type: "string" },
+    avatarState: { type: "string", enum: ["listening", "nodding", "confused", "speaking"] },
+    delivery: {
+      type: "array",
+      items: metricSchema,
+      minItems: 5,
+      maxItems: 5,
+    },
+    content: {
+      type: "array",
+      items: metricSchema,
+      minItems: 5,
+      maxItems: 5,
+    },
+    suggestedRewrite: { type: "string" },
+    followupQuestion: { type: "string" },
+  },
+  required: ["coachResponse", "avatarState", "delivery", "content", "suggestedRewrite", "followupQuestion"],
+};
+
+const geminiMetricSchema = {
+  type: "OBJECT",
+  properties: {
+    label: { type: "STRING" },
+    value: { type: "STRING" },
+    score: { type: "NUMBER" },
+  },
+  required: ["label", "value", "score"],
+  propertyOrdering: ["label", "value", "score"],
+};
+
+const geminiFeedbackSchema = {
+  type: "OBJECT",
+  properties: {
+    coachResponse: { type: "STRING" },
+    avatarState: { type: "STRING", enum: ["listening", "nodding", "confused", "speaking"] },
+    delivery: {
+      type: "ARRAY",
+      minItems: 5,
+      maxItems: 5,
+      items: geminiMetricSchema,
+    },
+    content: {
+      type: "ARRAY",
+      minItems: 5,
+      maxItems: 5,
+      items: geminiMetricSchema,
+    },
+    suggestedRewrite: { type: "STRING" },
+    followupQuestion: { type: "STRING" },
+  },
+  required: ["coachResponse", "avatarState", "delivery", "content", "suggestedRewrite", "followupQuestion"],
+  propertyOrdering: ["coachResponse", "avatarState", "delivery", "content", "suggestedRewrite", "followupQuestion"],
+};
+
+function extractResponseText(data) {
+  if (data.output_text) return data.output_text;
+
+  return data.output
+    ?.flatMap((item) => item.content || [])
+    .map((content) => content.text || "")
+    .join("")
+    .trim();
 }
 
 function buildFallbackFeedback(payload) {
@@ -154,6 +299,7 @@ function buildFallbackFeedback(payload) {
 
   return {
     coachResponse: buildCoachResponse(wpm, fillers.total, scores, visual),
+    avatarState: scores.problem < 6 ? "confused" : "speaking",
     delivery: [
       { label: "Speaking pace", value: paceLabel(wpm), score: paceScore(wpm) },
       { label: "Eye contact", value: visual.eye || "not measured", score: Number(visual.eyeScore ?? 0.45) },
@@ -169,7 +315,7 @@ function buildFallbackFeedback(payload) {
       { label: "Call to action", value: scores.cta > 5 ? `${scores.cta}/10` : "missing", score: scores.cta / 10 },
     ],
     suggestedRewrite: buildRewrite(scores),
-    followupQuestion: followupFor(payload?.audience || "hackathon"),
+    followupQuestion: followupFor(payload?.context || {}),
   };
 }
 
@@ -205,10 +351,12 @@ function buildRewrite(scores) {
   return "Tighten the strongest version into one sentence: 'PitchMirror is a live AI audience member that helps students and founders fix delivery and content before the real room is watching.'";
 }
 
-function followupFor(audience) {
-  if (audience === "interview") return "What tradeoff did you make, and what would you change with another week?";
-  if (audience === "investor") return "Who urgently needs this, and why will they choose you over the current workaround?";
-  return "What is the one moment in your demo that proves this is more than a concept?";
+function followupFor(context) {
+  if (context.presentationType === "interview-answer") return "What tradeoff did you make, and what would you change with another week?";
+  if (context.audienceType === "investor") return "Who urgently needs this, and why will they choose you over the current workaround?";
+  if (context.presentationType === "teaching") return "What concept should your audience remember five minutes after you finish?";
+  if (context.presentationType === "sales-demo") return "What customer pain does the demo prove you can solve today?";
+  return "What is the one sentence you want this audience to remember?";
 }
 
 function countFillers(transcript) {

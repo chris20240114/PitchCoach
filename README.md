@@ -49,8 +49,8 @@ LLM-powered evaluation of:
 
 ## Demo Flow
 
-1. Select "Hackathon Pitch Coach" mode
-2. Deliver a 60-second pitch
+1. Choose a presentation type, audience, and live coaching intensity
+2. Deliver a 60-second practice segment
 3. Avatar listens and reacts in real time
 4. Coach asks one follow-up question
 5. Provide your answer
@@ -112,8 +112,11 @@ No `npm install` is required for the current dependency-free server.
 - Browser speech recognition for live transcript capture
 - Browser speech synthesis for spoken coach feedback
 - Webcam-based visual heuristics for camera presence, lighting, and movement
+- Session timeline with timestamped transcript chunks, live coach events, audio summary, and visual samples
 - Deterministic pitch scoring for pace, filler words, problem clarity, user specificity, demo clarity, impact, and call to action
-- Audience modes for hackathon judge, technical interviewer, and investor
+- General-purpose presentation context for pitches, class presentations, interviews, sales demos, team updates, teaching, and speeches
+- Audience modes for general, technical, executive, beginner, evaluator, and investor audiences
+- Live coaching intensity modes: quiet, balanced, and interrupt me
 - Upload support for transcript, caption, audio, and video practice files
 
 ### LLM Feedback Integration Point
@@ -121,7 +124,7 @@ The browser now has two input paths:
 - Live practice captures transcript, duration, and visual signals.
 - Upload practice accepts a transcript/caption file, or media plus a pasted transcript.
 
-Both paths send the same normalized payload to `POST /api/feedback`. Keep the LLM API key on the backend, not in `app.js`.
+Both paths send the same normalized payload to `POST /api/feedback`, including presentation context and a session timeline when available. Keep the LLM API key on the backend, not in `app.js`.
 
 To connect an LLM provider, create `.env` from `.env.example`:
 ```bash
@@ -130,12 +133,13 @@ cp .env.example .env
 
 Then set:
 ```bash
-LLM_API_URL=your_chat_completions_compatible_endpoint
-LLM_API_KEY=your_key
-LLM_MODEL=your_model
+GEMINI_API_KEY=your_key
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
-If those values are missing, the server returns local fallback feedback so the demo still works.
+The backend prefers Gemini when `GEMINI_API_KEY` is set. It calls Gemini's `generateContent` API with a structured JSON schema for `coachResponse`, `avatarState`, delivery metrics, content metrics, suggested rewrite, and follow-up question. If no AI key is set or the API call fails, the server returns local fallback feedback so the demo still works.
+
+You can still compare OpenAI later by setting `OPENAI_API_KEY` and `OPENAI_MODEL`; Gemini takes priority when both keys are present.
 
 ## Usage Examples
 

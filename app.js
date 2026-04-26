@@ -20,6 +20,9 @@ const eyeSignal = document.querySelector("#eyeSignal");
 const positionSignal = document.querySelector("#positionSignal");
 const lightingSignal = document.querySelector("#lightingSignal");
 const movementSignal = document.querySelector("#movementSignal");
+const presentationType = document.querySelector("#presentationType");
+const audienceType = document.querySelector("#audienceType");
+const coachingIntensity = document.querySelector("#coachingIntensity");
 const uploadFile = document.querySelector("#uploadFile");
 const uploadStatus = document.querySelector("#uploadStatus");
 const uploadTranscript = document.querySelector("#uploadTranscript");
@@ -30,7 +33,11 @@ const mediaPreview = document.querySelector("#mediaPreview");
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 const state = {
-  mode: "hackathon",
+  context: {
+    presentationType: "pitch",
+    audienceType: "general",
+    coachingIntensity: "balanced",
+  },
   stream: null,
   recognition: null,
   startedAt: 0,
@@ -39,39 +46,20 @@ const state = {
   transcript: "",
   interim: "",
   samples: [],
+  transcriptEvents: [],
+  liveEvents: [],
   lastFrame: null,
   uploadUrl: "",
   uploadDuration: 60,
   uploadMedia: null,
 };
 
-const audienceCopy = {
-  hackathon: {
-    start: "Give me the first 60 seconds of your hackathon pitch. I am listening for the user problem, demo clarity, and what makes it matter.",
-    followup: "What is the one moment in your demo that proves this is more than a concept?",
-  },
-  interview: {
-    start: "Answer as if this were a technical interview. I will listen for tradeoffs, ownership, and clear examples.",
-    followup: "What tradeoff did you make, and what would you change with another week?",
-  },
-  investor: {
-    start: "Pitch this like an investor meeting. I will look for market pain, traction, differentiation, and a strong ask.",
-    followup: "Who urgently needs this, and why will they choose you over the current workaround?",
-  },
-};
-
-document.querySelectorAll(".mode").forEach((button) => {
-  button.addEventListener("click", () => {
-    document.querySelectorAll(".mode").forEach((item) => item.classList.remove("active"));
-    button.classList.add("active");
-    state.mode = button.dataset.mode;
-    say(audienceCopy[state.mode].start, "listening");
-  });
-});
-
 startBtn.addEventListener("click", startSession);
 stopBtn.addEventListener("click", stopSession);
 retryBtn.addEventListener("click", resetSession);
+presentationType.addEventListener("change", updateContext);
+audienceType.addEventListener("change", updateContext);
+coachingIntensity.addEventListener("change", updateContext);
 uploadFile.addEventListener("change", handleUploadFile);
 uploadTranscript.addEventListener("input", syncUploadControls);
 analyzeUploadBtn.addEventListener("click", analyzeUpload);
@@ -79,9 +67,12 @@ clearUploadBtn.addEventListener("click", clearUpload);
 
 async function startSession() {
   resetDashboard();
+  updateContext();
   state.transcript = "";
   state.interim = "";
   state.samples = [];
+  state.transcriptEvents = [];
+  state.liveEvents = [];
   state.startedAt = Date.now();
   transcriptEl.textContent = "";
   startBtn.disabled = true;
@@ -92,7 +83,21 @@ async function startSession() {
   startSpeech();
   startTimer();
   startVisionLoop();
-  say(audienceCopy[state.mode].start, "nodding");
+  say(buildStartMessage(), "nodding");
+}
+
+function updateContext() {
+  state.context = {
+    presentationType: presentationType.value,
+    audienceType: audienceType.value,
+    coachingIntensity: coachingIntensity.value,
+  };
+}
+
+function buildStartMessage() {
+  const presentation = presentationType.options[presentationType.selectedIndex].text.toLowerCase();
+  const audience = audienceType.options[audienceType.selectedIndex].text.toLowerCase();
+  return `Start your ${presentation}. I will listen as a ${audience} and track delivery, content, pacing, and camera presence.`;
 }
 
 async function startCamera() {
@@ -147,6 +152,13 @@ function startSpeech() {
     }
 
     if (finalText) state.transcript += finalText;
+    if (finalText) {
+      state.transcriptEvents.push({
+        atSeconds: getElapsedSeconds(),
+        text: finalText.trim(),
+        type: "final",
+      });
+    }
     state.interim = interimText;
     renderTranscript();
     maybeInterrupt();
@@ -232,7 +244,7 @@ function analyzeFrame(frame) {
 }
 
 function addVisionSample(sample) {
-  state.samples.push({ ...sample, at: Date.now() });
+  state.samples.push({ ...sample, at: Date.now(), atSeconds: getElapsedSeconds() });
   if (state.samples.length > 600) state.samples.shift();
 }
 
@@ -298,14 +310,19 @@ function renderTranscript() {
 }
 
 function maybeInterrupt() {
+  if (state.context.coachingIntensity === "quiet") return;
+
   const elapsed = getElapsedSeconds();
   const text = `${state.transcript} ${state.interim}`.toLowerCase();
   const technicalOpen = /\b(api|model|infrastructure|stack|database|framework|algorithm|multimodal)\b/.test(text);
   const humanWords = /\b(student|founder|user|customer|teacher|developer|patient|team|people)\b/.test(text);
+  const canInterruptEarly = state.context.coachingIntensity === "interrupt" ? elapsed > 8 : elapsed > 14;
 
-  if (elapsed > 10 && elapsed < 28 && technicalOpen && !humanWords && !coachMessage.dataset.interrupted) {
+  if (canInterruptEarly && elapsed < 32 && technicalOpen && !humanWords && !coachMessage.dataset.interrupted) {
     coachMessage.dataset.interrupted = "true";
-    say("Pause. I am hearing the build, but not the person. Who struggles with this, and why now?", "confused");
+    const message = "Pause. I am hearing the build, but not the person. Who struggles with this, and why now?";
+    state.liveEvents.push({ atSeconds: elapsed, type: "interruption", message });
+    say(message, "confused");
   }
 }
 
@@ -319,7 +336,7 @@ async function showFeedback(source = {}) {
   const scores = scoreContent(transcript);
   const fallback = buildLocalFeedback({ fillers, scores, transcript, visual, wpm });
   const feedback = await requestCoachFeedback({
-    audience: state.mode,
+    context: state.context,
     transcript,
     durationSeconds: elapsed,
     delivery: {
@@ -327,6 +344,7 @@ async function showFeedback(source = {}) {
       fillerWords: fillers.total,
     },
     visual,
+    timeline: buildSessionTimeline(transcript, elapsed, fillers, wpm, visual),
   }, fallback);
 
   renderList(deliveryList, feedback.delivery);
@@ -334,7 +352,48 @@ async function showFeedback(source = {}) {
   rewriteText.textContent = feedback.suggestedRewrite;
   followupText.textContent = feedback.followupQuestion;
   dashboard.classList.remove("hidden");
-  say(feedback.coachResponse, feedback.coachResponse.startsWith("Pause") ? "confused" : "speaking");
+  say(feedback.coachResponse, feedback.avatarState);
+}
+
+function buildSessionTimeline(transcript, durationSeconds, fillers, wpm, visual) {
+  return {
+    durationSeconds,
+    transcriptEvents: state.transcriptEvents.slice(-30),
+    liveCoachEvents: state.liveEvents.slice(-10),
+    visualSamples: summarizeVisualTimeline(),
+    audioSummary: {
+      wordsPerMinute: wpm,
+      fillerWords: fillers.total,
+      fillerTerms: fillers.matches.slice(0, 20),
+      estimatedWords: (transcript.match(/\b[\w'-]+\b/g) || []).length,
+    },
+    visualSummary: visual,
+  };
+}
+
+function summarizeVisualTimeline() {
+  const bucketSize = 5;
+  const buckets = new Map();
+
+  state.samples.forEach((sample) => {
+    const bucket = Math.floor((sample.atSeconds || 0) / bucketSize) * bucketSize;
+    const current = buckets.get(bucket) || { count: 0, eye: 0, centered: 0, lighting: 0, movement: 0 };
+    current.count += 1;
+    current.eye += sample.eye;
+    current.centered += sample.centered;
+    current.lighting += sample.lighting;
+    current.movement += sample.movement;
+    buckets.set(bucket, current);
+  });
+
+  return [...buckets.entries()].slice(-18).map(([startSecond, bucket]) => ({
+    startSecond,
+    endSecond: startSecond + bucketSize,
+    eyeScore: roundMetric(bucket.eye / bucket.count),
+    centeredScore: roundMetric(bucket.centered / bucket.count),
+    lighting: Math.round(bucket.lighting / bucket.count),
+    movementScore: roundMetric(bucket.movement / bucket.count),
+  }));
 }
 
 async function requestCoachFeedback(payload, fallback) {
@@ -355,6 +414,7 @@ async function requestCoachFeedback(payload, fallback) {
 function buildLocalFeedback({ fillers, scores, transcript, visual, wpm }) {
   return {
     coachResponse: buildSpokenFeedback(wpm, fillers.total, scores, visual),
+    avatarState: scores.problem < 6 || scores.user < 6 ? "confused" : "speaking",
     delivery: [
       { label: "Speaking pace", value: paceLabel(wpm), score: paceScore(wpm) },
       { label: "Eye contact", value: visual.eye, score: visual.eyeScore },
@@ -370,13 +430,14 @@ function buildLocalFeedback({ fillers, scores, transcript, visual, wpm }) {
       { label: "Call to action", value: scores.cta > 5 ? `${scores.cta}/10` : "missing", score: scores.cta / 10 },
     ],
     suggestedRewrite: buildRewrite(transcript, scores),
-    followupQuestion: audienceCopy[state.mode].followup,
+    followupQuestion: followupForContext(state.context),
   };
 }
 
 function normalizeFeedback(feedback, fallback) {
   return {
     coachResponse: feedback.coachResponse || fallback.coachResponse,
+    avatarState: ["listening", "nodding", "confused", "speaking"].includes(feedback.avatarState) ? feedback.avatarState : fallback.avatarState,
     delivery: normalizeRows(feedback.delivery, fallback.delivery),
     content: normalizeRows(feedback.content, fallback.content),
     suggestedRewrite: feedback.suggestedRewrite || fallback.suggestedRewrite,
@@ -456,6 +517,8 @@ function analyzeUpload() {
 
   state.transcript = transcript;
   state.interim = "";
+  state.transcriptEvents = [{ atSeconds: 0, text: transcript, type: "upload" }];
+  state.liveEvents = [];
   transcriptEl.textContent = transcript;
   speechStatus.textContent = "Upload analyzed";
 
@@ -544,6 +607,14 @@ function summarizeVision() {
     movement: movement > 0.3 ? "expressive" : movement > 0.12 ? "natural" : "flat ending",
     movementScore: Math.min(movement * 2.4, 1),
   };
+}
+
+function followupForContext(context) {
+  if (context.presentationType === "interview-answer") return "What tradeoff did you make, and what would you change with another week?";
+  if (context.audienceType === "investor") return "Who urgently needs this, and why will they choose you over the current workaround?";
+  if (context.presentationType === "teaching") return "What concept should your audience remember five minutes after you finish?";
+  if (context.presentationType === "sales-demo") return "What customer pain does the demo prove you can solve today?";
+  return "What is the one sentence you want this audience to remember?";
 }
 
 function scoreContent(transcript) {
@@ -652,6 +723,10 @@ function paceScore(wpm) {
   if (wpm >= 110 && wpm <= 155) return 0.9;
   if (wpm >= 95 && wpm <= 180) return 0.58;
   return 0.28;
+}
+
+function roundMetric(value) {
+  return Math.round(value * 100) / 100;
 }
 
 function clampScore(value) {

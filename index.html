@@ -12,14 +12,45 @@
         <header class="topbar">
           <div>
             <p class="eyebrow">PitchMirror</p>
-            <h1>Hackathon Pitch Coach</h1>
-          </div>
-          <div class="mode-switch" aria-label="Audience mode">
-            <button class="mode active" data-mode="hackathon">Judge</button>
-            <button class="mode" data-mode="interview">Interviewer</button>
-            <button class="mode" data-mode="investor">Investor</button>
+            <h1>Presentation Coach</h1>
           </div>
         </header>
+
+        <section class="setup-panel" aria-label="Session setup">
+          <label>
+            <span>Presentation type</span>
+            <select id="presentationType">
+              <option value="pitch">Pitch</option>
+              <option value="class-presentation">Class presentation</option>
+              <option value="interview-answer">Interview answer</option>
+              <option value="sales-demo">Sales demo</option>
+              <option value="team-update">Team update</option>
+              <option value="teaching">Lecture or teaching</option>
+              <option value="speech">Speech or toast</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+          <label>
+            <span>Audience</span>
+            <select id="audienceType">
+              <option value="general">General audience</option>
+              <option value="technical">Technical audience</option>
+              <option value="executive">Executive audience</option>
+              <option value="beginner">Beginner audience</option>
+              <option value="evaluator">Evaluator or judge</option>
+              <option value="investor">Investor</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+          <label>
+            <span>Live coaching</span>
+            <select id="coachingIntensity">
+              <option value="quiet">Quiet</option>
+              <option value="balanced" selected>Balanced</option>
+              <option value="interrupt">Interrupt me</option>
+            </select>
+          </label>
+        </section>
 
         <section class="stage">
           <div class="camera-panel">
@@ -41,7 +72,7 @@
             </div>
             <div>
               <p class="coach-label">Coach</p>
-              <p id="coachMessage" class="coach-message">Start a 60-second pitch. I will listen for problem clarity, pace, filler words, and camera presence.</p>
+              <p id="coachMessage" class="coach-message">Start a practice session. I will listen for content, delivery, pacing, filler words, and camera presence.</p>
             </div>
             <div class="coach-actions">
               <button id="startBtn" class="primary">Start pitch</button>
