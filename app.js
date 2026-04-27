@@ -1,135 +1,100 @@
-const camera = document.querySelector("#camera");
-const canvas = document.querySelector("#visionCanvas");
-const ctx = canvas.getContext("2d", { willReadFrequently: true });
-const trackingOverlay = document.querySelector("#trackingOverlay");
-const overlayCtx = trackingOverlay.getContext("2d");
-const startBtn = document.querySelector("#startBtn");
-const stopBtn = document.querySelector("#stopBtn");
-const retryBtn = document.querySelector("#retryBtn");
-const timerEl = document.querySelector("#timer");
-const cameraStatus = document.querySelector("#cameraStatus");
-const speechStatus = document.querySelector("#speechStatus");
-const signalStatus = document.querySelector("#signalStatus");
-const transcriptEl = document.querySelector("#transcript");
-const coachMessage = document.querySelector("#coachMessage");
-const avatar = document.querySelector("#avatar");
-const dashboard = document.querySelector("#dashboard");
-const deliveryList = document.querySelector("#deliveryList");
-const contentList = document.querySelector("#contentList");
-const rewriteText = document.querySelector("#rewriteText");
-const followupText = document.querySelector("#followupText");
-const eyeSignal = document.querySelector("#eyeSignal");
-const eyeFeedback = document.querySelector("#eyeFeedback");
-const positionSignal = document.querySelector("#positionSignal");
-const lightingSignal = document.querySelector("#lightingSignal");
-const movementSignal = document.querySelector("#movementSignal");
-const volumeSignal = document.querySelector("#volumeSignal");
-const energySignal = document.querySelector("#energySignal");
-const pitchSignal = document.querySelector("#pitchSignal");
-const pauseSignal = document.querySelector("#pauseSignal");
-const audioFeedback = document.querySelector("#audioFeedback");
-const coachSignal = document.querySelector("#coachSignal");
-const presentationType = document.querySelector("#presentationType");
-const audienceType = document.querySelector("#audienceType");
-const coachingIntensity = document.querySelector("#coachingIntensity");
-const uploadFile = document.querySelector("#uploadFile");
-const uploadStatus = document.querySelector("#uploadStatus");
-const uploadTranscript = document.querySelector("#uploadTranscript");
-const analyzeUploadBtn = document.querySelector("#analyzeUploadBtn");
-const clearUploadBtn = document.querySelector("#clearUploadBtn");
-const mediaPreview = document.querySelector("#mediaPreview");
-const analysisPanel = document.querySelector("#analysisPanel");
-const analysisStatus = document.querySelector("#analysisStatus");
-const analysisDetail = document.querySelector("#analysisDetail");
-const trackingToggle = document.querySelector("#trackingToggle");
-const reviewPanel = document.querySelector("#reviewPanel");
-const recordingStatus = document.querySelector("#recordingStatus");
-const recordingPlayback = document.querySelector("#recordingPlayback");
-const timelineStatus = document.querySelector("#timelineStatus");
-const eventTimeline = document.querySelector("#eventTimeline");
-const momentDetail = document.querySelector("#momentDetail");
-const momentTitle = document.querySelector("#momentTitle");
-const momentText = document.querySelector("#momentText");
-const chatPanel = document.querySelector("#chatPanel");
-const chatStatus = document.querySelector("#chatStatus");
-const chatMessages = document.querySelector("#chatMessages");
-const chatForm = document.querySelector("#chatForm");
-const chatInput = document.querySelector("#chatInput");
-const chatSendBtn = document.querySelector("#chatSendBtn");
-
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-const MEDIAPIPE_VISION_BUNDLE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
-const MEDIAPIPE_MODEL_ASSET = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
-const LIVE_SESSION_LIMIT_SECONDS = 300;
-const UPLOAD_MAX_DURATION_SECONDS = 300;
-const UPLOAD_MAX_BYTES = 75 * 1024 * 1024;
-const UPLOAD_FRAME_MAX = 80;
-const UPLOAD_FRAME_WIDTH = 640;
-const UPLOAD_FRAME_QUALITY = 0.68;
-const LIVE_SAMPLE_MAX = 12000;
-
-const state = {
-  context: {
-    presentationType: "pitch",
-    audienceType: "general",
-    coachingIntensity: "balanced",
-  },
-  stream: null,
-  recognition: null,
-  listeningPausedForCoach: false,
-  faceLandmarker: null,
-  faceLandmarkerReady: false,
-  faceLandmarkerError: "",
-  faceLandmarkerPromise: null,
-  faceDetector: null,
-  startedAt: 0,
-  timerId: null,
-  visionId: null,
-  audioId: null,
-  overlayVisible: true,
-  recorder: null,
-  recordingChunks: [],
-  recordingBlob: null,
-  recordingUrl: "",
-  transcript: "",
-  interim: "",
-  samples: [],
-  audioSamples: [],
-  transcriptEvents: [],
-  liveEvents: [],
-  timelineEvents: [],
-  transcriptSegments: [],
-  eventCooldowns: {},
-  lastFeedbackContext: null,
-  chatHistory: [],
-  interruption: {
-    lastAtSeconds: -999,
-    offTrackHits: 0,
-    technicalHits: 0,
-    lastReason: "",
-  },
-  lastFrame: null,
-  lastGazeBias: 0,
-  lastEyeMid: null,
-  lastFaceCenter: null,
-  eyeAlertUntil: 0,
-  eyeRecentLevel: 0,
-  audioContext: null,
-  audioAnalyser: null,
-  audioSource: null,
-  audioData: null,
-  lastSpeechAt: 0,
-  lastSilentAt: 0,
-  pauseMoments: [],
-  recentPauseMs: 0,
-  recentPitch: 0,
-  recentPitchDelta: 0,
-  speechActive: false,
-  uploadUrl: "",
-  uploadDuration: 60,
-  uploadMedia: null,
-  uploadFileBlob: null,
-};
+import {
+  analysisDetail,
+  analysisPanel,
+  analysisStatus,
+  analyzeUploadBtn,
+  audioFeedback,
+  audienceType,
+  avatar,
+  camera,
+  cameraStatus,
+  canvas,
+  chatForm,
+  chatInput,
+  chatMessages,
+  chatPanel,
+  chatSendBtn,
+  chatStatus,
+  clearUploadBtn,
+  coachMessage,
+  coachSignal,
+  coachingIntensity,
+  contentList,
+  ctx,
+  dashboard,
+  deliveryList,
+  energySignal,
+  eyeFeedback,
+  eyeSignal,
+  followupText,
+  lightingSignal,
+  movementSignal,
+  overlayCtx,
+  pauseSignal,
+  pitchSignal,
+  positionSignal,
+  presentationType,
+  recordingPlayback,
+  recordingStatus,
+  retryBtn,
+  rewriteText,
+  reviewPanel,
+  signalStatus,
+  speechStatus,
+  startBtn,
+  stopBtn,
+  timerEl,
+  trackingOverlay,
+  trackingToggle,
+  transcriptEl,
+  volumeSignal,
+} from "./dom.js";
+import {
+  LIVE_SAMPLE_MAX,
+  LIVE_SESSION_LIMIT_SECONDS,
+  MEDIAPIPE_MODEL_ASSET,
+  MEDIAPIPE_VISION_BUNDLE,
+  SpeechRecognition,
+} from "./config.js";
+import { state } from "./state.js";
+import {
+  buildRewrite,
+  buildSpokenFeedback,
+  countFillers,
+  followupForContext,
+  scoreContent,
+} from "./coaching.js";
+import {
+  clamp,
+  formatTime,
+  paceLabel,
+  paceScore,
+  roundMetric,
+  samplePitch,
+} from "./utils.js";
+import {
+  clearRecordingReview,
+  mergeTimelineNotes,
+  normalizePerformanceNotes,
+  renderTimeline,
+} from "./review.js";
+import {
+  analyzeAudioFrame,
+  audioFeedbackText,
+  energyLabel,
+  energyScore,
+  pauseLabel,
+  pauseScore,
+  pitchLabel,
+  pitchScore,
+  volumeLabel,
+  volumeScore,
+} from "./audioMetrics.js";
+import {
+  setInferredUploadTranscript,
+  setupUploadHandlers,
+  syncUploadControls,
+} from "./uploads.js";
 
 startBtn.addEventListener("click", startSession);
 stopBtn.addEventListener("click", stopSession);
@@ -137,12 +102,17 @@ retryBtn.addEventListener("click", resetSession);
 presentationType.addEventListener("change", updateContext);
 audienceType.addEventListener("change", updateContext);
 coachingIntensity.addEventListener("change", updateContext);
-uploadFile.addEventListener("change", handleUploadFile);
-uploadTranscript.addEventListener("input", syncUploadControls);
-analyzeUploadBtn.addEventListener("click", analyzeUpload);
-clearUploadBtn.addEventListener("click", clearUpload);
 trackingToggle.addEventListener("click", toggleTrackingOverlay);
 chatForm.addEventListener("submit", handleChatSubmit);
+setupUploadHandlers({
+  analyzeFrame,
+  resetDashboard,
+  resetFeedbackChat,
+  resetInterruptionState,
+  say,
+  setAnalyzing,
+  showFeedback,
+});
 
 async function startSession() {
   resetDashboard();
@@ -512,45 +482,6 @@ function addVisionSample(sample) {
   if (state.samples.length > LIVE_SAMPLE_MAX) state.samples.shift();
 }
 
-function analyzeAudioFrame(buffer, sampleRate) {
-  let sumSquares = 0;
-  let peak = 0;
-  for (let index = 0; index < buffer.length; index += 1) {
-    const value = buffer[index];
-    sumSquares += value * value;
-    peak = Math.max(peak, Math.abs(value));
-  }
-
-  const rms = Math.sqrt(sumSquares / buffer.length);
-  const db = 20 * Math.log10(Math.max(rms, 0.00001));
-  const voiced = rms > 0.018;
-  const pitchHz = voiced ? detectPitch(buffer, sampleRate) : 0;
-  const now = performance.now();
-
-  if (voiced) {
-    if (!state.speechActive && state.lastSilentAt) {
-      const pauseMs = now - state.lastSilentAt;
-      if (pauseMs > 220) {
-        state.pauseMoments.push(pauseMs);
-        if (state.pauseMoments.length > 18) state.pauseMoments.shift();
-        state.recentPauseMs = pauseMs;
-      }
-    }
-    state.lastSpeechAt = now;
-  } else if (state.speechActive) {
-    state.lastSilentAt = now;
-  }
-
-  state.speechActive = voiced;
-  const pitchDelta = pitchHz && state.recentPitch ? Math.abs(pitchHz - state.recentPitch) : 0;
-  if (pitchHz) {
-    state.recentPitch = pitchHz;
-    state.recentPitchDelta = pitchDelta;
-  }
-
-  return { rms, db, peak, voiced, pitchHz, pitchDelta, pauseMs: state.recentPauseMs, atSeconds: getElapsedSeconds() };
-}
-
 function addAudioSample(sample) {
   state.audioSamples.push({ ...sample, at: Date.now() });
   recordAudioEvent(sample);
@@ -843,12 +774,7 @@ async function showFeedback(source = {}) {
     : feedback;
   const effectiveTranscript = videoFeedback?.inferredTranscript?.trim() || transcript;
   if (videoFeedback?.inferredTranscript?.trim() && !rawTranscript.trim()) {
-    uploadTranscript.value = videoFeedback.inferredTranscript.trim();
-    transcriptEl.textContent = videoFeedback.inferredTranscript.trim();
-    state.transcript = videoFeedback.inferredTranscript.trim();
-    state.transcriptEvents = [{ atSeconds: 0, text: videoFeedback.inferredTranscript.trim(), type: "video-transcript" }];
-    state.transcriptSegments = [{ time: 0, text: videoFeedback.inferredTranscript.trim() }];
-    syncUploadControls();
+    setInferredUploadTranscript(videoFeedback.inferredTranscript);
   }
 
   renderList(deliveryList, finalFeedback.delivery);
@@ -1104,94 +1030,6 @@ function buildGenericTimeline(scores, visual, audio) {
   return notes;
 }
 
-function normalizePerformanceNotes(notes, fallbackNotes = []) {
-  if (!Array.isArray(notes) || notes.length === 0) return fallbackNotes || [];
-  return notes.slice(0, 8).map((note, index) => ({
-    time: Number.isFinite(Number(note.time)) ? Number(note.time) : Number(note.second ?? fallbackNotes[index]?.time ?? 0),
-    type: normalizeNoteType(note.type || fallbackNotes[index]?.type),
-    label: note.label || fallbackNotes[index]?.label || "Review moment",
-    detail: note.detail || note.value || fallbackNotes[index]?.detail || "",
-  }));
-}
-
-function normalizeNoteType(type = "moment") {
-  if (["eye", "wording", "audio", "pause", "posture"].includes(type)) return type;
-  if (["volume", "pitch", "energy"].includes(type)) return "audio";
-  if (["gesture", "movement", "head"].includes(type)) return "posture";
-  return "wording";
-}
-
-function mergeTimelineNotes(primary = [], secondary = []) {
-  const merged = [...normalizePerformanceNotes(primary, []), ...normalizePerformanceNotes(secondary, [])];
-  const seen = new Set();
-  return merged
-    .sort((a, b) => a.time - b.time)
-    .filter((note) => {
-      const key = `${Math.round(note.time)}:${note.type}:${note.label}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, 10);
-}
-
-function renderTimeline(notes) {
-  const normalized = normalizePerformanceNotes(notes, []);
-  eventTimeline.innerHTML = "";
-  timelineStatus.textContent = normalized.length ? `${normalized.length} moments` : "No moments";
-  reviewPanel.classList.remove("hidden");
-  hideMomentDetail();
-
-  if (!normalized.length) return;
-
-  const duration = Math.max(recordingPlayback.duration || state.lastFeedbackContext?.durationSeconds || getElapsedSeconds() || 60, 1);
-  normalized.forEach((note) => {
-    const button = document.createElement("button");
-    button.className = `timeline-marker ${note.type}`;
-    button.type = "button";
-    button.style.left = `${Math.min(Math.max((Number(note.time) / duration) * 100, 1), 99)}%`;
-    button.setAttribute("aria-label", `${formatTime(Math.round(note.time))} ${note.label}`);
-    button.addEventListener("mouseenter", () => showMomentDetail(note));
-    button.addEventListener("focus", () => showMomentDetail(note));
-    button.addEventListener("mouseleave", hideMomentDetail);
-    button.addEventListener("blur", hideMomentDetail);
-    button.addEventListener("click", () => {
-      if (recordingPlayback.src) {
-        recordingPlayback.pause();
-        recordingPlayback.currentTime = Math.max(0, Math.min(Number(note.time), duration));
-      }
-      showMomentDetail(note);
-    });
-    eventTimeline.appendChild(button);
-  });
-}
-
-function showMomentDetail(note) {
-  momentDetail.classList.remove("hidden");
-  timelineStatus.textContent = "Selected";
-  momentTitle.textContent = `${formatTime(Math.round(note.time))} ${note.label}`;
-  momentText.textContent = note.detail;
-}
-
-function hideMomentDetail() {
-  momentDetail.classList.add("hidden");
-  momentTitle.textContent = "";
-  momentText.textContent = "";
-}
-
-function clearRecordingReview() {
-  reviewPanel.classList.add("hidden");
-  eventTimeline.innerHTML = "";
-  hideMomentDetail();
-  timelineStatus.textContent = "Waiting";
-  recordingStatus.textContent = "No recording";
-  recordingPlayback.removeAttribute("src");
-  recordingPlayback.load();
-  if (state.recordingUrl && state.recordingUrl !== state.uploadUrl) URL.revokeObjectURL(state.recordingUrl);
-  state.recordingUrl = "";
-  state.recordingBlob = null;
-}
-
 async function requestVideoPerformanceNotes(context) {
   const result = await requestVideoFeedback(context);
   return normalizePerformanceNotes(result?.performanceNotes, []);
@@ -1410,321 +1248,6 @@ function resetFeedbackChat() {
   chatSendBtn.disabled = true;
 }
 
-function handleUploadFile() {
-  const file = uploadFile.files?.[0];
-  clearUploadPreview();
-  resetDashboard();
-  resetFeedbackChat();
-  setAnalyzing(false);
-
-  if (!file) {
-    state.uploadFileBlob = null;
-    syncUploadControls();
-    return;
-  }
-
-  if (!validateUploadFile(file)) {
-    uploadFile.value = "";
-    state.uploadFileBlob = null;
-    syncUploadControls();
-    return;
-  }
-
-  uploadStatus.textContent = file.name;
-  clearUploadBtn.disabled = false;
-
-  if (isTextFile(file)) {
-    const reader = new FileReader();
-    reader.onload = () => {
-      uploadTranscript.value = cleanTranscriptFile(String(reader.result || ""));
-      transcriptEl.textContent = uploadTranscript.value || "Transcript loaded.";
-      speechStatus.textContent = "Upload transcript";
-      state.uploadDuration = estimateDurationFromTranscript(uploadTranscript.value);
-      syncUploadControls();
-      say("Transcript loaded. I can analyze this like a practice round.", "listening");
-    };
-    reader.readAsText(file);
-    return;
-  }
-
-  if (isVideoFile(file) || file.type.startsWith("audio/")) {
-    state.uploadUrl = URL.createObjectURL(file);
-    const media = document.createElement(isVideoFile(file) ? "video" : "audio");
-    media.controls = true;
-    media.src = state.uploadUrl;
-    mediaPreview.appendChild(media);
-    mediaPreview.classList.remove("hidden");
-    state.uploadMedia = media;
-    state.uploadFileBlob = file;
-    media.addEventListener("loadedmetadata", () => {
-      state.uploadDuration = Number.isFinite(media.duration) ? Math.max(Math.round(media.duration), 1) : 60;
-      if (state.uploadDuration > UPLOAD_MAX_DURATION_SECONDS) {
-        say(`This upload is ${formatTime(state.uploadDuration)}. Please use a clip under ${formatTime(UPLOAD_MAX_DURATION_SECONDS)}.`, "confused");
-        uploadStatus.textContent = `Too long (${formatTime(state.uploadDuration)})`;
-        analyzeUploadBtn.disabled = true;
-        return;
-      }
-      syncUploadControls();
-    });
-    speechStatus.textContent = "Upload media";
-    syncUploadControls();
-    say(isVideoFile(file)
-      ? "Video loaded. I can review the audio and visual delivery directly; a transcript is optional."
-      : "Audio loaded. Add the transcript, then I will give feedback on the presentation.", "listening");
-  }
-}
-
-async function analyzeUpload() {
-  const transcript = uploadTranscript.value.trim();
-  const isVideoUpload = state.uploadMedia?.tagName === "VIDEO" && state.uploadFileBlob;
-
-  if (state.uploadFileBlob && !validateUploadFile(state.uploadFileBlob)) return;
-  if (isVideoUpload && state.uploadDuration > UPLOAD_MAX_DURATION_SECONDS) {
-    say(`Please trim the video under ${formatTime(UPLOAD_MAX_DURATION_SECONDS)} before analyzing.`, "confused");
-    return;
-  }
-
-  if (!transcript && !isVideoUpload) {
-    say("I need a transcript for content feedback. Paste the words from the presentation, then analyze again.", "confused");
-    uploadTranscript.focus();
-    return;
-  }
-
-  if (isVideoUpload) {
-    try {
-      await ensureMediaReady(state.uploadMedia);
-      state.uploadDuration = Number.isFinite(state.uploadMedia.duration) ? Math.max(Math.round(state.uploadMedia.duration), 1) : state.uploadDuration;
-    } catch {
-      say("I could not read this video's duration. Try exporting it as MP4 or WebM.", "confused");
-      return;
-    }
-    if (state.uploadDuration > UPLOAD_MAX_DURATION_SECONDS) {
-      say(`This upload is ${formatTime(state.uploadDuration)}. Please use a clip under ${formatTime(UPLOAD_MAX_DURATION_SECONDS)}.`, "confused");
-      uploadStatus.textContent = `Too long (${formatTime(state.uploadDuration)})`;
-      analyzeUploadBtn.disabled = true;
-      return;
-    }
-  }
-
-  state.transcript = transcript;
-  state.interim = "";
-  state.transcriptEvents = transcript ? [{ atSeconds: 0, text: transcript, type: "upload" }] : [];
-  state.liveEvents = [];
-  state.timelineEvents = [];
-  state.transcriptSegments = transcript ? [{ time: 0, text: transcript }] : [];
-  state.eventCooldowns = {};
-  resetInterruptionState();
-  transcriptEl.textContent = transcript || "Video uploaded. Gemini will review the recording directly.";
-  speechStatus.textContent = "Upload analyzed";
-  setAnalyzing(true, "Preparing upload", isVideoUpload ? "Checking video duration and extracting representative frames." : "Preparing transcript for coaching feedback.");
-  analyzeUploadBtn.disabled = true;
-  clearUploadBtn.disabled = true;
-
-  const visual = await summarizeUploadVisual();
-  let frames = [];
-  if (isVideoUpload) {
-    recordingPlayback.src = state.uploadUrl;
-    reviewPanel.classList.remove("hidden");
-    recordingStatus.textContent = "Extracting frames";
-    setAnalyzing(true, "Extracting frames", "Sampling timestamped frames for gaze, posture, and framing feedback.");
-    frames = await extractVideoFrames(state.uploadMedia, state.uploadDuration);
-    recordingStatus.textContent = frames.length ? `${frames.length} frames sampled` : "Uploaded video";
-  }
-  showFeedback({
-    transcript,
-    durationSeconds: state.uploadDuration || estimateDurationFromTranscript(transcript),
-    visual,
-    videoBlob: isVideoUpload ? state.uploadFileBlob : null,
-    frames,
-    preferVideoFeedback: isVideoUpload,
-  });
-}
-
-async function summarizeUploadVisual() {
-  const media = state.uploadMedia;
-  if (!media || media.tagName !== "VIDEO" || media.readyState < 2) {
-    return { eye: "not measured", eyeScore: 0.45, movement: "not measured", movementScore: 0.45 };
-  }
-
-  try {
-    ctx.drawImage(media, 0, 0, canvas.width, canvas.height);
-    const sample = await analyzeFrame(ctx.getImageData(0, 0, canvas.width, canvas.height));
-    return {
-      eye: sample.eye > 0.7 ? "consistent" : sample.eye > 0.48 ? "inconsistent" : "drifting down or away",
-      eyeScore: sample.eye,
-      movement: "single-frame sample",
-      movementScore: Math.max(sample.movement, 0.45),
-    };
-  } catch {
-    return { eye: "not measured", eyeScore: 0.45, movement: "not measured", movementScore: 0.45 };
-  }
-}
-
-async function extractVideoFrames(video, fallbackDuration = 60) {
-  if (!video || video.tagName !== "VIDEO") return [];
-
-  try {
-    await ensureMediaReady(video);
-    const duration = Number.isFinite(video.duration) ? video.duration : fallbackDuration;
-    if (!Number.isFinite(duration) || duration <= 0) return [];
-
-    const wasPaused = video.paused;
-    const originalTime = video.currentTime;
-    const frameCanvas = document.createElement("canvas");
-    const aspect = video.videoWidth && video.videoHeight ? video.videoHeight / video.videoWidth : 9 / 16;
-    frameCanvas.width = UPLOAD_FRAME_WIDTH;
-    frameCanvas.height = Math.round(UPLOAD_FRAME_WIDTH * aspect);
-    const frameCtx = frameCanvas.getContext("2d");
-    const frames = [];
-
-    for (const time of buildFrameTimes(duration)) {
-      await seekMedia(video, time);
-      frameCtx.drawImage(video, 0, 0, frameCanvas.width, frameCanvas.height);
-      const dataUrl = frameCanvas.toDataURL("image/jpeg", UPLOAD_FRAME_QUALITY);
-      frames.push({
-        time: Math.round(time * 10) / 10,
-        mimeType: "image/jpeg",
-        data: dataUrl.split(",")[1] || "",
-        width: frameCanvas.width,
-        height: frameCanvas.height,
-      });
-    }
-
-    await seekMedia(video, Math.min(originalTime, duration));
-    if (!wasPaused) video.play().catch(() => {});
-    return frames.filter((frame) => frame.data);
-  } catch {
-    return [];
-  }
-}
-
-function buildFrameTimes(duration) {
-  const targetFps = duration <= 45 ? 2 : duration <= 120 ? 1.5 : 1;
-  const interval = 1 / targetFps;
-  const start = Math.min(0.35, Math.max(duration * 0.05, 0));
-  const end = Math.max(start, duration - 0.25);
-  const times = [];
-
-  for (let time = start; time <= end; time += interval) {
-    times.push(Math.min(time, end));
-  }
-
-  if (times.length <= UPLOAD_FRAME_MAX) return times;
-  const sampled = [];
-  for (let index = 0; index < UPLOAD_FRAME_MAX; index += 1) {
-    const sourceIndex = Math.round((index / Math.max(UPLOAD_FRAME_MAX - 1, 1)) * (times.length - 1));
-    sampled.push(times[sourceIndex]);
-  }
-  return sampled;
-}
-
-function ensureMediaReady(media) {
-  if (media.readyState >= 2 && Number.isFinite(media.duration)) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const done = () => {
-      cleanup();
-      resolve();
-    };
-    const fail = () => {
-      cleanup();
-      reject(new Error("Media metadata unavailable"));
-    };
-    const cleanup = () => {
-      media.removeEventListener("loadedmetadata", done);
-      media.removeEventListener("loadeddata", done);
-      media.removeEventListener("error", fail);
-    };
-    media.addEventListener("loadedmetadata", done, { once: true });
-    media.addEventListener("loadeddata", done, { once: true });
-    media.addEventListener("error", fail, { once: true });
-  });
-}
-
-function seekMedia(media, time) {
-  return new Promise((resolve, reject) => {
-    const target = Math.max(0, Math.min(time, media.duration || time));
-    if (Math.abs((media.currentTime || 0) - target) < 0.03 && media.readyState >= 2) {
-      resolve();
-      return;
-    }
-
-    const done = () => {
-      cleanup();
-      resolve();
-    };
-    const fail = () => {
-      cleanup();
-      reject(new Error("Media seek failed"));
-    };
-    const cleanup = () => {
-      media.removeEventListener("seeked", done);
-      media.removeEventListener("error", fail);
-    };
-    media.addEventListener("seeked", done, { once: true });
-    media.addEventListener("error", fail, { once: true });
-    media.currentTime = target;
-  });
-}
-
-function clearUpload() {
-  uploadFile.value = "";
-  uploadTranscript.value = "";
-  uploadStatus.textContent = "No file";
-  state.uploadDuration = 60;
-  state.uploadFileBlob = null;
-  clearUploadPreview();
-  syncUploadControls();
-}
-
-function clearUploadPreview() {
-  if (state.uploadUrl) URL.revokeObjectURL(state.uploadUrl);
-  state.uploadUrl = "";
-  state.uploadMedia = null;
-  mediaPreview.innerHTML = "";
-  mediaPreview.classList.add("hidden");
-}
-
-function syncUploadControls() {
-  const hasFile = Boolean(uploadFile.files?.[0]);
-  const hasTranscript = Boolean(uploadTranscript.value.trim());
-  const mediaTooLong = state.uploadMedia && state.uploadDuration > UPLOAD_MAX_DURATION_SECONDS;
-  analyzeUploadBtn.disabled = (!hasFile && !hasTranscript) || mediaTooLong;
-  clearUploadBtn.disabled = !hasFile && !hasTranscript;
-}
-
-function isTextFile(file) {
-  return file.type.startsWith("text/") || /\.(txt|md|vtt|srt)$/i.test(file.name);
-}
-
-function isVideoFile(file) {
-  return file.type.startsWith("video/") || /\.(mp4|mov|m4v|mpeg|mpg|avi|webm|wmv|flv|3gp|3gpp)$/i.test(file.name);
-}
-
-function validateUploadFile(file) {
-  if (!file) return false;
-  if ((isVideoFile(file) || file.type.startsWith("audio/")) && file.size > UPLOAD_MAX_BYTES) {
-    const maxMb = Math.round(UPLOAD_MAX_BYTES / 1024 / 1024);
-    say(`This file is too large. Please upload a media file under ${maxMb} MB.`, "confused");
-    uploadStatus.textContent = `Limit ${maxMb} MB`;
-    return false;
-  }
-  return true;
-}
-
-function cleanTranscriptFile(value) {
-  return value
-    .replace(/WEBVTT/gi, "")
-    .replace(/\d{1,2}:\d{2}:\d{2}[,.]\d{3}\s+-->\s+\d{1,2}:\d{2}:\d{2}[,.]\d{3}/g, "")
-    .replace(/^\d+$/gm, "")
-    .replace(/\n{2,}/g, "\n")
-    .trim();
-}
-
-function estimateDurationFromTranscript(transcript) {
-  const words = transcript.match(/\b[\w'-]+\b/g) || [];
-  return Math.max(Math.round((words.length / 145) * 60), 20);
-}
-
 function summarizeVision() {
   if (!state.samples.length) {
     return { eye: "not measured", eyeScore: 0.4, movement: "not measured", movementScore: 0.4 };
@@ -1779,71 +1302,6 @@ function summarizeAudio() {
     pause: avgPause > 1100 ? "long gaps" : avgPause > 420 ? "healthy pauses" : "few pauses",
     pauseScore: avgPause > 1100 ? 0.34 : avgPause > 420 ? 0.84 : 0.46,
   };
-}
-
-function followupForContext(context) {
-  if (context.presentationType === "interview-answer") return "What tradeoff did you make, and what would you change with another week?";
-  if (context.audienceType === "investor") return "Who urgently needs this, and why will they choose you over the current workaround?";
-  if (context.presentationType === "teaching") return "What concept should your audience remember five minutes after you finish?";
-  if (context.presentationType === "sales-demo") return "What customer pain does the demo prove you can solve today?";
-  return "What is the one sentence you want this audience to remember?";
-}
-
-function scoreContent(transcript) {
-  const text = transcript.toLowerCase();
-  const has = (terms) => terms.some((term) => text.includes(term));
-  const problem = 3 + (has(["problem", "struggle", "pain", "hard", "waste", "miss", "too late"]) ? 4 : 0) + (has(["because", "so that", "which means"]) ? 2 : 0);
-  const user = 3 + (has(["student", "founder", "judge", "teacher", "developer", "team", "customer", "user"]) ? 4 : 0) + (has(["for ", "when they", "who "]) ? 1 : 0);
-  const demo = 3 + (has(["demo", "shows", "watch", "listen", "real time", "feedback", "dashboard"]) ? 4 : 0) + (has(["example", "for instance"]) ? 1 : 0);
-  const impact = 2 + (has(["before", "improve", "save", "confidence", "better", "faster", "practice"]) ? 4 : 0) + (has(["high-stakes", "interview", "presentation", "pitch"]) ? 2 : 0);
-  const cta = 2 + (has(["try", "use", "join", "next", "ask", "looking for", "we need"]) ? 5 : 0);
-
-  return {
-    problem: clampScore(problem),
-    user: clampScore(user),
-    demo: clampScore(demo),
-    impact: clampScore(impact),
-    cta: clampScore(cta),
-  };
-}
-
-function buildRewrite(transcript, scores) {
-  if (scores.problem < 6 || scores.user < 6) {
-    return "Instead of starting with the technology, start with the person: 'Students practicing important presentations usually get feedback too late. PitchCoach watches and listens in real time, then tells them what the audience actually heard and saw.'";
-  }
-
-  if (scores.cta < 6) {
-    return "Keep your current opening, then end with a clear ask: 'Today we want judges to test a 60-second pitch and tell us whether the feedback feels like a real coach.'";
-  }
-
-  return "Tighten the strongest version into one sentence: 'PitchCoach is a live AI audience member that helps students and founders fix delivery and content before the real room is watching.'";
-}
-
-function buildSpokenFeedback(wpm, fillers, scores, visual, audio = {}) {
-  if (scores.problem < 6) {
-    return "Pause. Your pitch needs a clearer pain point. Start with who is struggling, then explain what changes when your product works.";
-  }
-  if (wpm > 170) {
-    return `You are speaking clearly, but the pace is fast at about ${wpm} words per minute. Add a pause after your main problem sentence.`;
-  }
-  if (fillers > 8) {
-    return `You used ${fillers} filler words. Replace them with short pauses, especially before the demo explanation.`;
-  }
-  if (visual.eyeScore < 0.5) {
-    return "The content is landing, but your camera presence is inconsistent. Look into the camera during your strongest sentence.";
-  }
-  if (audio.volumeScore < 0.4) {
-    return "The structure is clear, but your volume is low. Push a little more air through your strongest sentence.";
-  }
-  if (audio.pitchScore < 0.4) {
-    return "The message is clear, but the delivery sounds narrow. Add more rise and fall to highlight the important idea.";
-  }
-  return "Much better. The structure is clear. Now add one concrete proof point so a judge remembers why this matters.";
-}
-
-function countFillers(transcript) {
-  const matches = transcript.toLowerCase().match(/\b(um|uh|like|basically|actually|literally|kind of|sort of|you know)\b/g) || [];
-  return { total: matches.length, matches };
 }
 
 function eyeMovementLabel(sample) {
@@ -1986,10 +1444,6 @@ function computeRecentEyeActivity(sample, now) {
 function effectiveEyeLevel(sample) {
   if (sample.isBlinking) return 0;
   return Math.max(sample.drift ?? 0, sample.recentLevel ?? 0, (sample.eyeMotion ?? 0) * 0.85);
-}
-
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
 }
 
 async function detectFaceSample() {
@@ -2155,99 +1609,6 @@ function headMovementScore(sample) {
   return Math.max(0, Math.min(sample.movement * 2, 1));
 }
 
-function volumeLabel(db) {
-  if (db > -18) return "strong";
-  if (db > -26) return "clear";
-  if (db > -34) return "soft";
-  return "too quiet";
-}
-
-function volumeScore(db) {
-  if (db > -18) return 0.9;
-  if (db > -26) return 0.72;
-  if (db > -34) return 0.48;
-  return 0.24;
-}
-
-function energyLabel(sample) {
-  if (!sample.voiced) return "waiting";
-  if (sample.peak > 0.2) return "animated";
-  if (sample.peak > 0.1) return "steady";
-  return "flat";
-}
-
-function energyScore(sample) {
-  if (!sample.voiced) return 0.4;
-  if (sample.peak > 0.2) return 0.9;
-  if (sample.peak > 0.1) return 0.66;
-  return 0.34;
-}
-
-function pitchLabel(sample) {
-  if (!sample.pitchHz) return "listening";
-  if (sample.pitchDelta > 28) return "varied";
-  if (sample.pitchDelta > 12) return "moderate";
-  return "narrow";
-}
-
-function pitchScore(sample) {
-  if (!sample.pitchHz) return 0.4;
-  if (sample.pitchDelta > 28) return 0.88;
-  if (sample.pitchDelta > 12) return 0.62;
-  return 0.32;
-}
-
-function pauseLabel(sample) {
-  if (sample.voiced) {
-    if (sample.pauseMs > 1100) return "long gap";
-    if (sample.pauseMs > 420) return "spaced";
-    return "tight";
-  }
-  const silenceFor = state.lastSpeechAt ? performance.now() - state.lastSpeechAt : 0;
-  if (silenceFor > 1100) return "holding";
-  if (silenceFor > 420) return "pause";
-  return "brief";
-}
-
-function pauseScore(sample) {
-  if (sample.pauseMs > 1100) return 0.3;
-  if (sample.pauseMs > 420) return 0.84;
-  if (sample.voiced) return 0.46;
-  return 0.58;
-}
-
-function audioFeedbackText(sample) {
-  if (!sample.voiced) {
-    const silenceFor = state.lastSpeechAt ? performance.now() - state.lastSpeechAt : 0;
-    if (silenceFor > 1100) return "Long pause detected. This can work before a key point, but too many will break momentum.";
-    if (silenceFor > 420) return "Healthy pause. Let the next line land cleanly.";
-    return "Mic is live. Start speaking to analyze pace, volume, pitch range, and pauses.";
-  }
-  if (sample.db < -34) return "Volume is low right now. Push a little more air through the next sentence.";
-  if (sample.pitchDelta < 10) return "Pitch range is narrow. Add more rise and fall so the idea sounds alive.";
-  if (sample.peak > 0.22) return "Vocal energy is strong. Keep that lift on your important phrases.";
-  return "Audio analysis is active: volume, energy, pitch range, and pauses are being measured live.";
-}
-
-function detectPitch(buffer, sampleRate) {
-  let bestOffset = -1;
-  let bestCorrelation = 0;
-  const minSamples = Math.floor(sampleRate / 300);
-  const maxSamples = Math.floor(sampleRate / 85);
-  for (let offset = minSamples; offset <= maxSamples; offset += 1) {
-    let correlation = 0;
-    for (let index = 0; index < buffer.length - offset; index += 1) {
-      correlation += buffer[index] * buffer[index + offset];
-    }
-    if (correlation > bestCorrelation) {
-      bestCorrelation = correlation;
-      bestOffset = offset;
-    }
-  }
-  if (bestOffset === -1 || bestCorrelation < 6) return 0;
-  return sampleRate / bestOffset;
-}
-
 function facePositionLabel(sample) {
   if (sample.faceDetectorActive && !sample.faceDetected) return "searching";
   if (sample.centered > 0.72) return "centered";
@@ -2345,33 +1706,3 @@ function getElapsedSeconds() {
   return state.startedAt ? Math.round((Date.now() - state.startedAt) / 1000) : 0;
 }
 
-function formatTime(seconds) {
-  const minutes = String(Math.floor(seconds / 60)).padStart(2, "0");
-  const rest = String(seconds % 60).padStart(2, "0");
-  return `${minutes}:${rest}`;
-}
-
-function paceLabel(wpm) {
-  if (wpm > 180) return `${wpm} wpm, too fast`;
-  if (wpm > 155) return `${wpm} wpm, slightly fast`;
-  if (wpm < 95) return `${wpm} wpm, slow`;
-  return `${wpm} wpm, clear`;
-}
-
-function paceScore(wpm) {
-  if (wpm >= 110 && wpm <= 155) return 0.9;
-  if (wpm >= 95 && wpm <= 180) return 0.58;
-  return 0.28;
-}
-
-function roundMetric(value) {
-  return Math.round(value * 100) / 100;
-}
-
-function clampScore(value) {
-  return Math.max(1, Math.min(10, value));
-}
-
-function samplePitch() {
-  return "So basically we made an AI thing that uses vision and audio and it is kind of like a coach. It watches and listens in real time and gives feedback for presentations.";
-}

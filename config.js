@@ -1,0 +1,10 @@
+export const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+export const MEDIAPIPE_VISION_BUNDLE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+export const MEDIAPIPE_MODEL_ASSET = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+export const LIVE_SESSION_LIMIT_SECONDS = 300;
+export const UPLOAD_MAX_DURATION_SECONDS = 300;
+export const UPLOAD_MAX_BYTES = 75 * 1024 * 1024;
+export const UPLOAD_FRAME_MAX = 80;
+export const UPLOAD_FRAME_WIDTH = 640;
+export const UPLOAD_FRAME_QUALITY = 0.68;
+export const LIVE_SAMPLE_MAX = 12000;
