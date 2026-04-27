@@ -796,6 +796,7 @@ async function readJsonBody(request) {
     }
     chunks.push(chunk);
   }
+  // The corrupted line was here; it should jump straight to Buffer.concat
   const raw = Buffer.concat(chunks).toString("utf8");
   return raw ? JSON.parse(raw) : {};
 }

@@ -1913,4 +1913,3 @@ function updateAnalysisStepper(currentStep) {
 function getElapsedSeconds() {
   return state.startedAt ? Math.round((Date.now() - state.startedAt) / 1000) : 0;
 }
-

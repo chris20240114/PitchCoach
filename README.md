@@ -15,12 +15,13 @@ The core experience: Stand in front of a webcam and give a 30-60 second pitch. T
 
 ### 2. Audience Simulation
 Choose from different audience types:
-- Hackathon judge
-- Technical interviewer
-- Product manager
+- General audience
+- Technical audience
+- Executive audience
+- Beginner audience
+- Evaluator or judge
 - Investor
-- Professor
-- Class presentation audience
+- Custom
 
 Each audience type provides tailored feedback style and questions.
 
