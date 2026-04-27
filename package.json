@@ -9,5 +9,11 @@
     "start": "node server.js",
     "check": "node --check server.js && node --check app.js && node --check config.js && node --check dom.js && node --check state.js && node --check utils.js && node --check coaching.js && node --check review.js && node --check audioMetrics.js && node --check uploads.js",
     "stop": "pkill --signal SIGINT myAppName"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^3.0.53",
+    "@google/genai": "^1.50.1",
+    "ai": "^6.0.168",
+    "dotenv": "^17.4.2"
   }
 }
