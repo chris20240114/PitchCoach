@@ -1705,24 +1705,3 @@ function setAnalyzing(active, status = "Analyzing practice", detail = "Extractin
 function getElapsedSeconds() {
   return state.startedAt ? Math.round((Date.now() - state.startedAt) / 1000) : 0;
 }
-
-async function getAIReview(transcript, metrics) {
-  const response = await fetch("/api/review", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      transcript,
-      metrics,
-    }),
-  });
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(data.error || "Failed to get AI review");
-  }
-
-  return data.feedback;
-}
