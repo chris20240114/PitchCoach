@@ -3,151 +3,177 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>PitchCoach - AI Presentation Coach</title>
+    <title>PitchMirror - AI Presentation Coach</title>
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
     <main class="app-shell">
-      <section class="workspace" aria-label="PitchCoach coach workspace">
+      <section id="introScreen" class="intro-screen" aria-label="PitchMirror introduction">
+        <div class="intro-orbit" aria-hidden="true">
+          <span class="logo-mark logo-mark-main">PM</span>
+          <span class="logo-chip chip-camera">CAM</span>
+          <span class="logo-chip chip-voice">VOICE</span>
+          <span class="logo-chip chip-script">SCRIPT</span>
+          <span class="logo-chip chip-score">SCORE</span>
+        </div>
+        <div class="intro-copy">
+          <p class="eyebrow">AI presentation coach</p>
+          <h1 class="brand-title">PitchMirror</h1>
+          <p class="intro-line">Practice your pitch, then see exactly what your audience hears, sees, and remembers.</p>
+          <button id="enterAppBtn" class="primary hero-cta" type="button">Get Started</button>
+        </div>
+      </section>
+
+      <section id="workspace" class="workspace hidden" aria-label="PitchMirror coach workspace">
         <header class="topbar">
           <div>
-            <p class="eyebrow">PitchCoach</p>
-            <h1>Presentation Coach</h1>
+            <p class="eyebrow">PitchMirror</p>
+            <h1 class="app-title">PitchMirror</h1>
             <p class="subtitle">Practice live for up to 5 minutes or upload a short recording for multimodal feedback.</p>
           </div>
         </header>
 
-        <section class="setup-panel" aria-label="Session setup">
-          <label>
-            <span>Presentation type</span>
-            <select id="presentationType">
-              <option value="pitch">Pitch</option>
-              <option value="class-presentation">Class presentation</option>
-              <option value="interview-answer">Interview answer</option>
-              <option value="sales-demo">Sales demo</option>
-              <option value="team-update">Team update</option>
-              <option value="teaching">Lecture or teaching</option>
-              <option value="speech">Speech or toast</option>
-              <option value="custom">Custom</option>
-            </select>
-          </label>
-          <label>
-            <span>Audience</span>
-            <select id="audienceType">
-              <option value="general">General audience</option>
-              <option value="technical">Technical audience</option>
-              <option value="executive">Executive audience</option>
-              <option value="beginner">Beginner audience</option>
-              <option value="evaluator">Evaluator or judge</option>
-              <option value="investor">Investor</option>
-              <option value="custom">Custom</option>
-            </select>
-          </label>
-          <label>
-            <span>Live coaching</span>
-            <select id="coachingIntensity">
-              <option value="quiet">Quiet</option>
-              <option value="balanced" selected>Balanced</option>
-              <option value="interrupt">Interrupt me</option>
-            </select>
-          </label>
-        </section>
+        <nav class="app-nav" aria-label="Workspace views">
+          <button class="view-tab active" type="button" data-view="practiceView">Practice</button>
+          <button class="view-tab" type="button" data-view="uploadView">Upload</button>
+          <button class="view-tab" type="button" data-view="resultsView" disabled>Results</button>
+        </nav>
 
-        <section class="stage">
-          <div class="camera-panel">
-            <video id="camera" autoplay playsinline muted></video>
-            <canvas id="visionCanvas" width="320" height="180" aria-hidden="true"></canvas>
-            <canvas id="trackingOverlay" width="320" height="180" aria-hidden="true"></canvas>
-            <div class="camera-overlay">
-              <span id="cameraStatus">Camera off</span>
-              <div class="camera-tools">
-                <button id="trackingToggle" class="icon-toggle active" type="button" aria-pressed="true" title="Show face tracking overlay">Face box</button>
-                <span id="timer">00:00</span>
-              </div>
-            </div>
-          </div>
+        <section id="practiceView" class="app-view active-view" aria-label="Live practice">
+          <section class="setup-panel" aria-label="Session setup">
+            <label>
+              <span>Presentation type</span>
+              <select id="presentationType">
+                <option value="pitch">Pitch</option>
+                <option value="class-presentation">Class presentation</option>
+                <option value="interview-answer">Interview answer</option>
+                <option value="sales-demo">Sales demo</option>
+                <option value="team-update">Team update</option>
+                <option value="teaching">Lecture or teaching</option>
+                <option value="speech">Speech or toast</option>
+                <option value="custom">Custom</option>
+              </select>
+            </label>
+            <label>
+              <span>Audience</span>
+              <select id="audienceType">
+                <option value="general">General audience</option>
+                <option value="technical">Technical audience</option>
+                <option value="executive">Executive audience</option>
+                <option value="beginner">Beginner audience</option>
+                <option value="evaluator">Evaluator or judge</option>
+                <option value="investor">Investor</option>
+                <option value="custom">Custom</option>
+              </select>
+            </label>
+            <label>
+              <span>Live coaching</span>
+              <select id="coachingIntensity">
+                <option value="quiet">Quiet</option>
+                <option value="balanced" selected>Balanced</option>
+                <option value="interrupt">Interrupt me</option>
+              </select>
+            </label>
+          </section>
 
-          <aside class="coach-panel" aria-label="Live AI coach">
-            <div id="avatar" class="avatar listening">
-              <div class="avatar-face">
-                <span class="eye left"></span>
-                <span class="eye right"></span>
-                <span class="mouth"></span>
-              </div>
-            </div>
-            <div>
-              <p class="coach-label">Coach</p>
-              <p id="coachMessage" class="coach-message">Start a practice session. I will listen for content, delivery, pacing, filler words, and camera presence.</p>
-            </div>
-            <div class="coach-actions">
-              <button id="startBtn" class="primary">Start practice</button>
-              <button id="stopBtn" disabled>Stop</button>
-              <button id="retryBtn" disabled>Retry</button>
-            </div>
-          </aside>
-        </section>
-
-        <section class="lower-grid">
-          <article class="panel transcript-panel">
-            <div class="panel-heading">
-              <h2>Live Transcript</h2>
-              <span id="speechStatus">Speech idle</span>
-            </div>
-            <p id="transcript" class="transcript">Your pitch transcript will appear here as you speak.</p>
-          </article>
-
-          <article class="panel signals-panel">
-            <div class="panel-heading">
-              <h2>Live Signals</h2>
-              <span id="signalStatus">Waiting</span>
-            </div>
-            <div class="signal-list">
-              <div class="signal-row signal-detail">
-                <div>
-                  <span>Eye movement</span>
-                  <p id="eyeFeedback" class="signal-feedback">Waiting for camera</p>
+          <section class="stage">
+            <div class="camera-panel">
+              <video id="camera" autoplay playsinline muted></video>
+              <canvas id="visionCanvas" width="320" height="180" aria-hidden="true"></canvas>
+              <canvas id="trackingOverlay" width="320" height="180" aria-hidden="true"></canvas>
+              <div class="camera-overlay">
+                <span id="cameraStatus">Camera off</span>
+                <div class="camera-tools">
+                  <button id="trackingToggle" class="icon-toggle active" type="button" aria-pressed="true" title="Show face tracking overlay">Face box</button>
+                  <span id="timer">00:00</span>
                 </div>
-                <strong id="eyeSignal">--</strong>
-              </div>
-              <div>
-                <span>Face position</span>
-                <strong id="positionSignal">--</strong>
-              </div>
-              <div>
-                <span>Lighting</span>
-                <strong id="lightingSignal">--</strong>
-              </div>
-              <div>
-                <span>Movement</span>
-                <strong id="movementSignal">--</strong>
-              </div>
-              <div>
-                <span>Volume</span>
-                <strong id="volumeSignal">--</strong>
-              </div>
-              <div>
-                <span>Vocal energy</span>
-                <strong id="energySignal">--</strong>
-              </div>
-              <div>
-                <span>Pitch range</span>
-                <strong id="pitchSignal">--</strong>
-              </div>
-              <div class="signal-row signal-detail">
-                <div>
-                  <span>Pause rhythm</span>
-                  <p id="audioFeedback" class="signal-feedback">Waiting for microphone</p>
-                </div>
-                <strong id="pauseSignal">--</strong>
-              </div>
-              <div>
-                <span>Coach tracking</span>
-                <strong id="coachSignal">waiting</strong>
               </div>
             </div>
-          </article>
+
+            <aside class="coach-panel" aria-label="Live AI coach">
+              <div id="avatar" class="avatar listening">
+                <div class="avatar-face">
+                  <span class="eye left"></span>
+                  <span class="eye right"></span>
+                  <span class="mouth"></span>
+                </div>
+              </div>
+              <div>
+                <p class="coach-label">Coach</p>
+                <p id="coachMessage" class="coach-message">Start a practice session. I will listen for content, delivery, pacing, filler words, and camera presence.</p>
+              </div>
+              <div class="coach-actions">
+                <button id="startBtn" class="primary">Start practice</button>
+                <button id="stopBtn" disabled>Stop</button>
+                <button id="retryBtn" disabled>Retry</button>
+                <button id="startAnalyzeBtn" class="primary hidden" type="button">Start Analyze</button>
+              </div>
+            </aside>
+          </section>
+
+          <section class="lower-grid">
+            <article class="panel transcript-panel">
+              <div class="panel-heading">
+                <h2>Live Transcript</h2>
+                <span id="speechStatus">Speech idle</span>
+              </div>
+              <p id="transcript" class="transcript">Your pitch transcript will appear here as you speak.</p>
+            </article>
+
+            <article class="panel signals-panel">
+              <div class="panel-heading">
+                <h2>Live Signals</h2>
+                <span id="signalStatus">Waiting</span>
+              </div>
+              <div class="signal-list">
+                <div class="signal-row signal-detail">
+                  <div>
+                    <span>Eye movement</span>
+                    <p id="eyeFeedback" class="signal-feedback">Waiting for camera</p>
+                  </div>
+                  <strong id="eyeSignal">--</strong>
+                </div>
+                <div>
+                  <span>Face position</span>
+                  <strong id="positionSignal">--</strong>
+                </div>
+                <div>
+                  <span>Lighting</span>
+                  <strong id="lightingSignal">--</strong>
+                </div>
+                <div>
+                  <span>Movement</span>
+                  <strong id="movementSignal">--</strong>
+                </div>
+                <div>
+                  <span>Volume</span>
+                  <strong id="volumeSignal">--</strong>
+                </div>
+                <div>
+                  <span>Vocal energy</span>
+                  <strong id="energySignal">--</strong>
+                </div>
+                <div>
+                  <span>Pitch range</span>
+                  <strong id="pitchSignal">--</strong>
+                </div>
+                <div class="signal-row signal-detail">
+                  <div>
+                    <span>Pause rhythm</span>
+                    <p id="audioFeedback" class="signal-feedback">Waiting for microphone</p>
+                  </div>
+                  <strong id="pauseSignal">--</strong>
+                </div>
+                <div>
+                  <span>Coach tracking</span>
+                  <strong id="coachSignal">waiting</strong>
+                </div>
+              </div>
+            </article>
+          </section>
         </section>
 
+        <section id="uploadView" class="app-view hidden" aria-label="Upload practice">
         <section class="upload-grid">
           <article class="panel upload-panel">
             <div class="panel-heading">
@@ -164,13 +190,43 @@
             <div id="mediaPreview" class="media-preview hidden"></div>
           </article>
         </section>
+        </section>
+
+        <section id="resultsView" class="app-view hidden" aria-label="Pitch feedback results">
+        <div class="result-topbar">
+          <button id="resultBackBtn" type="button">Back</button>
+          <div>
+            <p class="eyebrow">Pitch analysis</p>
+            <h2>Summary and feedback</h2>
+          </div>
+        </div>
 
         <section id="analysisPanel" class="analysis-panel hidden" aria-live="polite">
-          <div class="analysis-spinner" aria-hidden="true"></div>
-          <div>
+          <div class="analysis-progress" aria-hidden="true">
+            <div class="analysis-spinner"></div>
+            <ol class="stepper">
+              <li class="step active" data-step="1">Extracting audio and frames</li>
+              <li class="step" data-step="2">Transcribing your speech</li>
+              <li class="step" data-step="3">Scoring delivery signals</li>
+              <li class="step" data-step="4">Building your dashboard</li>
+            </ol>
+          </div>
+          <div class="analysis-copy">
             <strong id="analysisStatus">Analyzing practice</strong>
             <p id="analysisDetail">Extracting speech, frames, and delivery signals.</p>
           </div>
+        </section>
+
+        <section id="resultSummary" class="result-summary hidden" aria-label="Overall pitch score">
+          <article class="score-card">
+            <span>Score</span>
+            <strong><span id="overallScore">--</span><small>/10</small></strong>
+            <p id="scoreLabel">Feedback ready</p>
+          </article>
+          <article class="panel radar-panel">
+            <h2>Pitch Dimensions</h2>
+            <svg id="radarChart" class="radar-chart" viewBox="0 0 520 320" role="img" aria-label="Pitch dimension radar chart"></svg>
+          </article>
         </section>
 
         <section id="dashboard" class="dashboard hidden" aria-label="Feedback dashboard">
@@ -228,6 +284,7 @@
             <input id="chatInput" type="text" placeholder="Ask Gemini how to improve this feedback..." disabled>
             <button id="chatSendBtn" class="primary" type="submit" disabled>Ask</button>
           </form>
+        </section>
         </section>
       </section>
     </main>

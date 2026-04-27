@@ -52,11 +52,16 @@ export function renderTimeline(notes) {
   if (!normalized.length) return;
 
   const duration = Math.max(recordingPlayback.duration || state.lastFeedbackContext?.durationSeconds || getElapsedSecondsFallback() || 60, 1);
-  normalized.forEach((note) => {
+  const placedPercents = [];
+  normalized.forEach((note, index) => {
     const button = document.createElement("button");
     button.className = `timeline-marker ${note.type}`;
     button.type = "button";
-    button.style.left = `${Math.min(Math.max((Number(note.time) / duration) * 100, 1), 99)}%`;
+    const rawPercent = Math.min(Math.max((Number(note.time) / duration) * 100, 1), 99);
+    const visualPercent = getSeparatedMarkerPercent(rawPercent, placedPercents);
+    placedPercents.push(visualPercent);
+    button.style.left = `${visualPercent}%`;
+    button.style.top = `${index % 2 === 0 ? 44 : 66}%`;
     button.setAttribute("aria-label", `${formatTime(Math.round(note.time))} ${note.label}`);
     button.addEventListener("mouseenter", () => showMomentDetail(note));
     button.addEventListener("focus", () => showMomentDetail(note));
@@ -71,6 +76,20 @@ export function renderTimeline(notes) {
     });
     eventTimeline.appendChild(button);
   });
+}
+
+function getSeparatedMarkerPercent(percent, placedPercents) {
+  const minGap = 1.8;
+  let adjusted = percent;
+  placedPercents
+    .slice()
+    .sort((a, b) => a - b)
+    .forEach((placed) => {
+      if (Math.abs(adjusted - placed) < minGap) {
+        adjusted = placed + minGap;
+      }
+    });
+  return Math.min(Math.max(adjusted, 1), 99);
 }
 
 export function clearRecordingReview() {

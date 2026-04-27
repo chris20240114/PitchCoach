@@ -2,7 +2,9 @@ import {
   analysisDetail,
   analysisPanel,
   analysisStatus,
+  analysisSteps,
   analyzeUploadBtn,
+  appViews,
   audioFeedback,
   audienceType,
   avatar,
@@ -24,11 +26,14 @@ import {
   dashboard,
   deliveryList,
   energySignal,
+  enterAppBtn,
   eyeFeedback,
   eyeSignal,
   followupText,
+  introScreen,
   lightingSignal,
   movementSignal,
+  overallScore,
   overlayCtx,
   pauseSignal,
   pitchSignal,
@@ -36,18 +41,25 @@ import {
   presentationType,
   recordingPlayback,
   recordingStatus,
+  radarChart,
+  resultBackBtn,
+  resultSummary,
   retryBtn,
   rewriteText,
   reviewPanel,
+  scoreLabel,
   signalStatus,
   speechStatus,
+  startAnalyzeBtn,
   startBtn,
   stopBtn,
   timerEl,
   trackingOverlay,
   trackingToggle,
   transcriptEl,
+  viewTabs,
   volumeSignal,
+  workspace,
 } from "./dom.js";
 import {
   LIVE_SAMPLE_MAX,
@@ -96,9 +108,13 @@ import {
   syncUploadControls,
 } from "./uploads.js";
 
+enterAppBtn.addEventListener("click", enterWorkspace);
+viewTabs.forEach((tab) => tab.addEventListener("click", () => switchView(tab.dataset.view)));
+resultBackBtn.addEventListener("click", () => switchView("previous"));
 startBtn.addEventListener("click", startSession);
 stopBtn.addEventListener("click", stopSession);
 retryBtn.addEventListener("click", resetSession);
+startAnalyzeBtn.addEventListener("click", () => showFeedback());
 presentationType.addEventListener("change", updateContext);
 audienceType.addEventListener("change", updateContext);
 coachingIntensity.addEventListener("change", updateContext);
@@ -110,12 +126,72 @@ setupUploadHandlers({
   resetFeedbackChat,
   resetInterruptionState,
   say,
-  setAnalyzing,
+  setAnalyzing: setAnalyzingFromUpload,
   showFeedback,
 });
 
+let currentViewId = "practiceView";
+let lastViewBeforeResults = "practiceView";
+let analysisStartedAt = 0;
+let analysisStepperTimer = null;
+let analysisStepperIndex = 1;
+const ANALYSIS_STEP_INTERVAL_MS = 1400;
+const ANALYSIS_MIN_DURATION_MS = 5600;
+
+function enterWorkspace() {
+  introScreen.classList.add("intro-exit");
+  window.setTimeout(() => {
+    introScreen.classList.add("hidden");
+    workspace.classList.remove("hidden");
+    workspace.classList.add("workspace-entered");
+  }, 360);
+}
+
+function switchView(viewId, options = {}) {
+  if (viewId === "previous") viewId = lastViewBeforeResults;
+  if (!viewId) return;
+  if (viewId === "resultsView" && !options.force && viewTabs[2]?.disabled) return;
+  if (viewId === "resultsView" && currentViewId !== "resultsView") {
+    lastViewBeforeResults = currentViewId;
+  }
+
+  appViews.forEach((view) => {
+    const active = view.id === viewId;
+    view.classList.toggle("hidden", !active);
+    view.classList.toggle("active-view", active);
+  });
+
+  viewTabs.forEach((tab) => {
+    tab.classList.toggle("active", tab.dataset.view === viewId);
+  });
+
+  currentViewId = viewId;
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function unlockResultsView() {
+  const resultsTab = [...viewTabs].find((tab) => tab.dataset.view === "resultsView");
+  if (resultsTab) resultsTab.disabled = false;
+}
+
+function lockResultsView() {
+  const resultsTab = [...viewTabs].find((tab) => tab.dataset.view === "resultsView");
+  if (resultsTab) resultsTab.disabled = true;
+}
+
+function setAnalyzingFromUpload(active, status, detail) {
+  if (active) {
+    unlockResultsView();
+    switchView("resultsView", { force: true });
+    resetDashboard();
+  }
+  setAnalyzing(active, status, detail);
+}
+
 async function startSession() {
+  switchView("practiceView");
   resetDashboard();
+  lockResultsView();
   updateContext();
   state.transcript = "";
   state.interim = "";
@@ -136,6 +212,8 @@ async function startSession() {
   startBtn.disabled = true;
   stopBtn.disabled = false;
   retryBtn.disabled = true;
+  startAnalyzeBtn.classList.add("hidden");
+  startAnalyzeBtn.disabled = true;
 
   await startCamera();
   initFaceLandmarker();
@@ -540,7 +618,11 @@ function stopSession() {
   cancelAnimationFrame(state.visionId);
   cancelAnimationFrame(state.audioId);
   stopRecording();
-  if (wasRunning) showFeedback();
+  if (wasRunning) {
+    startAnalyzeBtn.classList.remove("hidden");
+    startAnalyzeBtn.disabled = false;
+    showCoachText("Recording saved. Start the analysis when you are ready.", "listening");
+  }
 }
 
 function resetSession() {
@@ -576,6 +658,9 @@ function resetSession() {
   audioFeedback.textContent = "Waiting for microphone";
   coachSignal.textContent = "waiting";
   coachSignal.className = "";
+  startAnalyzeBtn.classList.add("hidden");
+  startAnalyzeBtn.disabled = true;
+  lockResultsView();
   clearTrackingOverlay();
   clearRecordingReview();
   resetFeedbackChat();
@@ -724,6 +809,11 @@ function expectedTopicKeywords(type) {
 }
 
 async function showFeedback(source = {}) {
+  unlockResultsView();
+  switchView("resultsView", { force: true });
+  resetDashboard();
+  startAnalyzeBtn.classList.add("hidden");
+  startAnalyzeBtn.disabled = true;
   setAnalyzing(true, source.preferVideoFeedback ? "Analyzing uploaded video" : "Analyzing practice", source.preferVideoFeedback
     ? "Sampling frames, reading audio, and asking Gemini for coaching feedback."
     : "Scoring transcript, delivery signals, and coaching moments.");
@@ -777,10 +867,12 @@ async function showFeedback(source = {}) {
     setInferredUploadTranscript(videoFeedback.inferredTranscript);
   }
 
+  await finishAnalysisStepper();
   renderList(deliveryList, finalFeedback.delivery);
   renderList(contentList, finalFeedback.content);
   rewriteText.textContent = finalFeedback.suggestedRewrite;
   followupText.textContent = finalFeedback.followupQuestion;
+  renderResultSummary(finalFeedback);
   dashboard.classList.remove("hidden");
   const initialNotes = mergeTimelineNotes(finalFeedback.performanceNotes, timeline);
   renderTimeline(initialNotes);
@@ -1625,6 +1717,73 @@ function renderList(target, rows) {
   });
 }
 
+function renderResultSummary(feedback) {
+  const content = feedback.content || [];
+  const delivery = feedback.delivery || [];
+  const findScore = (rows, pattern, fallback = 0.55) => rows.find((row) => pattern.test(row.label || ""))?.score ?? fallback;
+  const average = (values) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0.55;
+
+  const dimensions = [
+    { label: "Problem", score: findScore(content, /problem/i) },
+    { label: "Solution", score: findScore(content, /demo|solution/i) },
+    { label: "Clarity", score: average([findScore(content, /demo|clarity/i), findScore(content, /call/i)]) },
+    { label: "Evidence", score: findScore(content, /specific|evidence|user/i) },
+    { label: "Delivery", score: average(delivery.map((row) => row.score ?? 0.55)) || 0.55 },
+    { label: "Impact", score: findScore(content, /impact/i) },
+  ].map((item) => ({ ...item, score: clamp(Number(item.score) || 0, 0, 1) }));
+
+  const total = dimensions.reduce((sum, item) => sum + item.score, 0) / dimensions.length;
+  const displayScore = Math.round(total * 100) / 10;
+  overallScore.textContent = displayScore.toFixed(1);
+  scoreLabel.textContent = displayScore >= 8 ? "Strong pitch" : displayScore >= 6.5 ? "Solid pitch" : displayScore >= 5 ? "Developing pitch" : "Needs focus";
+  resultSummary.classList.remove("hidden");
+  renderRadarChart(dimensions);
+}
+
+function renderRadarChart(dimensions) {
+  const centerX = 250;
+  const centerY = 160;
+  const maxRadius = 92;
+  const angleOffset = -Math.PI / 2;
+  const polygonFor = (scale) => dimensions.map((_, index) => {
+    const angle = angleOffset + (Math.PI * 2 * index) / dimensions.length;
+    return `${centerX + Math.cos(angle) * maxRadius * scale},${centerY + Math.sin(angle) * maxRadius * scale}`;
+  }).join(" ");
+  const pointFor = (score, index) => {
+    const angle = angleOffset + (Math.PI * 2 * index) / dimensions.length;
+    return {
+      x: centerX + Math.cos(angle) * maxRadius * score,
+      y: centerY + Math.sin(angle) * maxRadius * score,
+      labelX: centerX + Math.cos(angle) * (maxRadius + 46),
+      labelY: centerY + Math.sin(angle) * (maxRadius + 32),
+    };
+  };
+  const dataPoints = dimensions.map((item, index) => {
+    const point = pointFor(item.score, index);
+    return `${point.x},${point.y}`;
+  }).join(" ");
+
+  radarChart.innerHTML = `
+    <g class="radar-grid">
+      ${[0.25, 0.5, 0.75, 1].map((scale) => `<polygon points="${polygonFor(scale)}"></polygon>`).join("")}
+      ${dimensions.map((_, index) => {
+        const point = pointFor(1, index);
+        return `<line x1="${centerX}" y1="${centerY}" x2="${point.x}" y2="${point.y}"></line>`;
+      }).join("")}
+    </g>
+    <polygon class="radar-fill" points="${dataPoints}"></polygon>
+    <polyline class="radar-line" points="${dataPoints} ${dataPoints.split(" ")[0]}"></polyline>
+    ${dimensions.map((item, index) => {
+      const point = pointFor(item.score, index);
+      const label = pointFor(1, index);
+      return `
+        <circle class="radar-dot" cx="${point.x}" cy="${point.y}" r="5"></circle>
+        <text x="${label.labelX}" y="${label.labelY}" text-anchor="middle">${item.label}</text>
+      `;
+    }).join("")}
+  `;
+}
+
 function showCoachText(message, expression) {
   coachMessage.textContent = message;
   avatar.className = `avatar ${expression}`;
@@ -1689,17 +1848,66 @@ function say(message, expression, options = {}) {
 
 function resetDashboard() {
   dashboard.classList.add("hidden");
+  resultSummary.classList.add("hidden");
   deliveryList.innerHTML = "";
   contentList.innerHTML = "";
   rewriteText.textContent = "";
   followupText.textContent = "";
+  overallScore.textContent = "--";
+  scoreLabel.textContent = "Feedback ready";
+  radarChart.innerHTML = "";
 }
 
 function setAnalyzing(active, status = "Analyzing practice", detail = "Extracting speech, frames, and delivery signals.") {
+  const wasHidden = analysisPanel.classList.contains("hidden");
   analysisPanel.classList.toggle("hidden", !active);
   analysisStatus.textContent = status;
   analysisDetail.textContent = detail;
+  if (active && (wasHidden || !analysisStartedAt)) startAnalysisStepper();
+  if (!active) stopAnalysisStepper();
   document.body.classList.toggle("is-analyzing", active);
+}
+
+function startAnalysisStepper() {
+  analysisStartedAt = Date.now();
+  analysisStepperIndex = 1;
+  updateAnalysisStepper(analysisStepperIndex);
+  window.clearInterval(analysisStepperTimer);
+  analysisStepperTimer = window.setInterval(() => {
+    analysisStepperIndex = Math.min(analysisStepperIndex + 1, analysisSteps.length);
+    updateAnalysisStepper(analysisStepperIndex);
+    if (analysisStepperIndex >= analysisSteps.length) {
+      window.clearInterval(analysisStepperTimer);
+      analysisStepperTimer = null;
+    }
+  }, ANALYSIS_STEP_INTERVAL_MS);
+}
+
+async function finishAnalysisStepper() {
+  if (!analysisStartedAt) return;
+  const elapsed = Date.now() - analysisStartedAt;
+  const remaining = Math.max(ANALYSIS_MIN_DURATION_MS - elapsed, 0);
+  if (remaining) await new Promise((resolve) => window.setTimeout(resolve, remaining));
+  window.clearInterval(analysisStepperTimer);
+  analysisStepperTimer = null;
+  analysisStepperIndex = analysisSteps.length + 1;
+  updateAnalysisStepper(analysisStepperIndex);
+}
+
+function stopAnalysisStepper() {
+  window.clearInterval(analysisStepperTimer);
+  analysisStepperTimer = null;
+  analysisStartedAt = 0;
+}
+
+function updateAnalysisStepper(currentStep) {
+  if (!analysisSteps.length) return;
+
+  analysisSteps.forEach((step, index) => {
+    const stepNumber = index + 1;
+    step.classList.toggle("complete", stepNumber < currentStep);
+    step.classList.toggle("active", stepNumber === currentStep);
+  });
 }
 
 function getElapsedSeconds() {
