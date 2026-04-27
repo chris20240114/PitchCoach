@@ -1,16 +1,20 @@
 :root {
   color-scheme: light;
-  --bg: #f5f7f8;
+  --bg: #eef3f5;
   --panel: #ffffff;
   --ink: #172022;
   --muted: #687579;
   --line: #dbe2e5;
   --accent: #0f766e;
   --accent-strong: #115e59;
+  --accent-soft: #e0f2ef;
+  --blue: #2563eb;
+  --amber: #d97706;
   --warn: #b45309;
   --bad: #b91c1c;
   --good: #15803d;
-  --shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
+  --shadow: 0 18px 45px rgba(15, 23, 42, 0.09);
+  --shadow-soft: 0 8px 24px rgba(15, 23, 42, 0.06);
 }
 
 * {
@@ -20,7 +24,7 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: var(--bg);
+  background: linear-gradient(180deg, #f8fbfc 0%, var(--bg) 48%, #e7edf0 100%);
   color: var(--ink);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
@@ -35,6 +39,13 @@ button {
   font-weight: 700;
   min-height: 42px;
   padding: 0 14px;
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+button:not(:disabled):hover {
+  border-color: rgba(15, 118, 110, 0.36);
+  box-shadow: var(--shadow-soft);
+  transform: translateY(-1px);
 }
 
 button:disabled {
@@ -48,8 +59,13 @@ button:disabled {
   color: #fff;
 }
 
+.primary:not(:disabled):hover {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
 .app-shell {
-  padding: 24px;
+  padding: 28px;
 }
 
 .workspace {
@@ -58,11 +74,11 @@ button:disabled {
 }
 
 .topbar {
-  align-items: end;
+  align-items: center;
   display: flex;
   gap: 18px;
   justify-content: space-between;
-  margin-bottom: 18px;
+  margin-bottom: 20px;
 }
 
 .eyebrow {
@@ -81,14 +97,22 @@ p {
 }
 
 h1 {
-  font-size: clamp(2rem, 5vw, 4.2rem);
-  line-height: 0.95;
-  margin-bottom: 0;
+  font-size: clamp(2.2rem, 5vw, 4.5rem);
+  line-height: 0.98;
+  margin-bottom: 8px;
 }
 
 h2 {
   font-size: 1rem;
   margin-bottom: 0;
+}
+
+.subtitle {
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.45;
+  margin: 0;
+  max-width: 720px;
 }
 
 .mode-switch {
@@ -113,10 +137,10 @@ h2 {
 }
 
 .setup-panel {
-  background: var(--panel);
+  background: rgba(255, 255, 255, 0.88);
   border: 1px solid var(--line);
   border-radius: 8px;
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-soft);
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -165,6 +189,7 @@ select {
 
 .camera-panel {
   aspect-ratio: 16 / 9;
+  background: #0f172a;
   overflow: hidden;
   position: relative;
 }
@@ -242,10 +267,27 @@ select {
   padding: 22px;
 }
 
+.coach-panel,
+.panel {
+  position: relative;
+}
+
+.coach-panel::before,
+.panel::before {
+  background: var(--accent);
+  border-radius: 8px 8px 0 0;
+  content: "";
+  height: 3px;
+  left: -1px;
+  position: absolute;
+  right: -1px;
+  top: -1px;
+}
+
 .avatar {
   align-items: center;
   aspect-ratio: 1;
-  background: #d7ede9;
+  background: var(--accent-soft);
   border: 1px solid #b7d6d0;
   border-radius: 50%;
   display: flex;
@@ -367,8 +409,20 @@ select {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.dashboard .panel:nth-child(2)::before {
+  background: var(--blue);
+}
+
+.dashboard .panel:nth-child(3)::before {
+  background: var(--amber);
+}
+
+.dashboard .panel:nth-child(4)::before {
+  background: #7c3aed;
+}
+
 .panel {
-  padding: 18px;
+  padding: 20px;
 }
 
 .panel-heading {
@@ -399,6 +453,12 @@ select {
   gap: 10px;
   justify-content: space-between;
   padding-bottom: 10px;
+}
+
+.dashboard li:last-child,
+.signal-list div:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
 }
 
 .signal-row {
@@ -439,6 +499,41 @@ select {
 .review-panel,
 .chat-panel {
   margin-top: 18px;
+}
+
+.analysis-panel {
+  align-items: center;
+  background: #0f172a;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  color: #f8fafc;
+  display: flex;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 16px 18px;
+}
+
+.analysis-panel p {
+  color: #cbd5e1;
+  line-height: 1.45;
+  margin: 4px 0 0;
+}
+
+.analysis-spinner {
+  animation: spin 900ms linear infinite;
+  border: 3px solid rgba(255, 255, 255, 0.22);
+  border-top-color: #5eead4;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  height: 28px;
+  width: 28px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .review-body {
@@ -653,6 +748,13 @@ select {
   margin-bottom: 12px;
 }
 
+.upload-hint {
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.4;
+  margin: -2px 0 12px;
+}
+
 input[type="file"] {
   border: 1px dashed var(--line);
   border-radius: 8px;
@@ -660,6 +762,15 @@ input[type="file"] {
   min-height: 42px;
   padding: 9px;
   width: 100%;
+}
+
+input[type="file"]:focus,
+textarea:focus,
+select:focus,
+.chat-form input:focus {
+  border-color: rgba(15, 118, 110, 0.55);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+  outline: 0;
 }
 
 textarea {

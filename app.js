@@ -38,6 +38,9 @@ const uploadTranscript = document.querySelector("#uploadTranscript");
 const analyzeUploadBtn = document.querySelector("#analyzeUploadBtn");
 const clearUploadBtn = document.querySelector("#clearUploadBtn");
 const mediaPreview = document.querySelector("#mediaPreview");
+const analysisPanel = document.querySelector("#analysisPanel");
+const analysisStatus = document.querySelector("#analysisStatus");
+const analysisDetail = document.querySelector("#analysisDetail");
 const trackingToggle = document.querySelector("#trackingToggle");
 const reviewPanel = document.querySelector("#reviewPanel");
 const recordingStatus = document.querySelector("#recordingStatus");
@@ -57,6 +60,13 @@ const chatSendBtn = document.querySelector("#chatSendBtn");
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const MEDIAPIPE_VISION_BUNDLE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MEDIAPIPE_MODEL_ASSET = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+const LIVE_SESSION_LIMIT_SECONDS = 300;
+const UPLOAD_MAX_DURATION_SECONDS = 300;
+const UPLOAD_MAX_BYTES = 75 * 1024 * 1024;
+const UPLOAD_FRAME_MAX = 80;
+const UPLOAD_FRAME_WIDTH = 640;
+const UPLOAD_FRAME_QUALITY = 0.68;
+const LIVE_SAMPLE_MAX = 12000;
 
 const state = {
   context: {
@@ -375,7 +385,7 @@ function startTimer() {
   state.timerId = window.setInterval(() => {
     const elapsed = getElapsedSeconds();
     timerEl.textContent = formatTime(elapsed);
-    if (elapsed >= 60) stopSession();
+    if (elapsed >= LIVE_SESSION_LIMIT_SECONDS) stopSession();
   }, 250);
 }
 
@@ -499,7 +509,7 @@ function addVisionSample(sample) {
   Object.assign(sample, computeRecentEyeActivity(sample, now));
   state.samples.push({ ...sample, at: now, atSeconds: getElapsedSeconds() });
   recordVisionEvent(sample);
-  if (state.samples.length > 600) state.samples.shift();
+  if (state.samples.length > LIVE_SAMPLE_MAX) state.samples.shift();
 }
 
 function analyzeAudioFrame(buffer, sampleRate) {
@@ -544,7 +554,7 @@ function analyzeAudioFrame(buffer, sampleRate) {
 function addAudioSample(sample) {
   state.audioSamples.push({ ...sample, at: Date.now() });
   recordAudioEvent(sample);
-  if (state.audioSamples.length > 600) state.audioSamples.shift();
+  if (state.audioSamples.length > LIVE_SAMPLE_MAX) state.audioSamples.shift();
 }
 
 function renderSignals(sample) {
@@ -639,6 +649,7 @@ function resetSession() {
   clearRecordingReview();
   resetFeedbackChat();
   resetDashboard();
+  setAnalyzing(false);
   say("Ready when you are. Start with the person who has the problem.", "listening");
 }
 
@@ -782,6 +793,14 @@ function expectedTopicKeywords(type) {
 }
 
 async function showFeedback(source = {}) {
+  setAnalyzing(true, source.preferVideoFeedback ? "Analyzing uploaded video" : "Analyzing practice", source.preferVideoFeedback
+    ? "Sampling frames, reading audio, and asking Gemini for coaching feedback."
+    : "Scoring transcript, delivery signals, and coaching moments.");
+  startBtn.disabled = true;
+  retryBtn.disabled = true;
+  analyzeUploadBtn.disabled = true;
+  clearUploadBtn.disabled = true;
+
   const elapsed = Math.max(source.durationSeconds || getElapsedSeconds(), 1);
   const rawTranscript = source.transcript ?? `${state.transcript} ${state.interim}`.trim();
   const transcript = rawTranscript.trim() || (source.videoBlob ? "No transcript provided; review visual and audio delivery only." : samplePitch());
@@ -793,7 +812,7 @@ async function showFeedback(source = {}) {
   const scores = scoreContent(transcript);
   const fallback = buildLocalFeedback({ audio, fillers, scores, transcript, visual, wpm });
   const timeline = buildTimelineEvents();
-  const feedback = await requestCoachFeedback({
+  const textFeedbackPayload = {
     context: state.context,
     transcript,
     durationSeconds: elapsed,
@@ -805,38 +824,68 @@ async function showFeedback(source = {}) {
     audio,
     timeline: buildSessionTimeline(transcript, elapsed, fillers, wpm, visual, audio),
     performanceNotes: timeline,
-  }, fallback);
+  };
+  const feedback = source.preferVideoFeedback
+    ? fallback
+    : await requestCoachFeedback(textFeedbackPayload, fallback);
+  const videoFeedback = source.preferVideoFeedback && source.videoBlob
+    ? await requestVideoFeedback({
+      transcript: rawTranscript.trim(),
+      durationSeconds: elapsed,
+      timeline,
+      feedback,
+      videoBlob: source.videoBlob,
+      frames: source.frames || [],
+    })
+    : null;
+  const finalFeedback = videoFeedback
+    ? normalizeFeedback({ ...feedback, ...videoFeedback }, feedback)
+    : feedback;
+  const effectiveTranscript = videoFeedback?.inferredTranscript?.trim() || transcript;
+  if (videoFeedback?.inferredTranscript?.trim() && !rawTranscript.trim()) {
+    uploadTranscript.value = videoFeedback.inferredTranscript.trim();
+    transcriptEl.textContent = videoFeedback.inferredTranscript.trim();
+    state.transcript = videoFeedback.inferredTranscript.trim();
+    state.transcriptEvents = [{ atSeconds: 0, text: videoFeedback.inferredTranscript.trim(), type: "video-transcript" }];
+    state.transcriptSegments = [{ time: 0, text: videoFeedback.inferredTranscript.trim() }];
+    syncUploadControls();
+  }
 
-  renderList(deliveryList, feedback.delivery);
-  renderList(contentList, feedback.content);
-  rewriteText.textContent = feedback.suggestedRewrite;
-  followupText.textContent = feedback.followupQuestion;
+  renderList(deliveryList, finalFeedback.delivery);
+  renderList(contentList, finalFeedback.content);
+  rewriteText.textContent = finalFeedback.suggestedRewrite;
+  followupText.textContent = finalFeedback.followupQuestion;
   dashboard.classList.remove("hidden");
-  const initialNotes = mergeTimelineNotes(feedback.performanceNotes, timeline);
+  const initialNotes = mergeTimelineNotes(finalFeedback.performanceNotes, timeline);
   renderTimeline(initialNotes);
   enableFeedbackChat({
-    transcript,
+    transcript: effectiveTranscript,
     durationSeconds: elapsed,
     wpm,
     fillers: fillers.total,
     visual,
     audio,
     timeline: initialNotes,
-    feedback,
+    feedback: finalFeedback,
   });
-  requestVideoPerformanceNotes({
-    transcript,
-    timeline: initialNotes,
-    feedback,
-    videoBlob: source.videoBlob,
-  }).then((videoNotes) => {
-    if (videoNotes.length) {
+  if (!source.preferVideoFeedback) {
+    requestVideoPerformanceNotes({
+      transcript,
+      timeline: initialNotes,
+      feedback: finalFeedback,
+      videoBlob: source.videoBlob,
+    }).then((videoNotes) => {
+      if (!videoNotes.length) return;
       const merged = mergeTimelineNotes(initialNotes, videoNotes);
       renderTimeline(merged);
       if (state.lastFeedbackContext) state.lastFeedbackContext.timeline = merged;
-    }
-  });
-  say(feedback.coachResponse, feedback.avatarState);
+    });
+  }
+  setAnalyzing(false);
+  startBtn.disabled = false;
+  retryBtn.disabled = false;
+  syncUploadControls();
+  say(finalFeedback.coachResponse, finalFeedback.avatarState);
 }
 
 function buildSessionTimeline(transcript, durationSeconds, fillers, wpm, visual, audio) {
@@ -1144,21 +1193,39 @@ function clearRecordingReview() {
 }
 
 async function requestVideoPerformanceNotes(context) {
+  const result = await requestVideoFeedback(context);
+  return normalizePerformanceNotes(result?.performanceNotes, []);
+}
+
+async function requestVideoFeedback(context) {
   const videoBlob = context.videoBlob || state.recordingBlob || (state.uploadMedia?.tagName === "VIDEO" ? state.uploadFileBlob : null);
-  if (!videoBlob || videoBlob.size > 18 * 1024 * 1024) return [];
+  if (!videoBlob) return null;
+  const mimeType = getGeminiVideoMime(videoBlob);
+
+  if (!mimeType) {
+    recordingStatus.textContent = "Unsupported video";
+    return null;
+  }
 
   try {
-    recordingStatus.textContent = "Gemini video";
+    recordingStatus.textContent = context.frames?.length ? `Gemini video + ${context.frames.length} frames` : "Gemini video";
+    setAnalyzing(true, "Asking Gemini", context.frames?.length
+      ? `Sending video, audio, and ${context.frames.length} sampled frames for feedback.`
+      : "Sending video and audio for feedback.");
     const videoData = await blobToBase64(videoBlob);
     const response = await fetch("/api/video-feedback", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        mimeType: videoBlob.type || "video/webm",
+        fileName: videoBlob.name || "practice-video",
+        mimeType,
         videoData,
+        frames: context.frames || [],
         context: {
           presentation: state.context,
+          durationSeconds: context.durationSeconds || state.uploadDuration || getElapsedSeconds(),
           transcript: context.transcript,
+          sampledFrames: summarizeFramePayload(context.frames || []),
           timeline: context.timeline,
           feedback: context.feedback,
           transcriptSegments: state.transcriptSegments.slice(0, 24),
@@ -1169,11 +1236,48 @@ async function requestVideoPerformanceNotes(context) {
     if (!response.ok) throw new Error(`Video feedback returned ${response.status}`);
     const result = await response.json();
     recordingStatus.textContent = result.source === "gemini" ? "Gemini video" : "Ready";
-    return normalizePerformanceNotes(result.performanceNotes, []);
+    return result;
   } catch {
     recordingStatus.textContent = "Ready";
-    return [];
+    return null;
   }
+}
+
+function summarizeFramePayload(frames) {
+  return {
+    count: frames.length,
+    fps: estimateFrameRate(frames),
+    firstSecond: frames[0]?.time ?? 0,
+    lastSecond: frames.at(-1)?.time ?? 0,
+    width: frames[0]?.width,
+    height: frames[0]?.height,
+  };
+}
+
+function estimateFrameRate(frames) {
+  if (frames.length < 2) return 0;
+  const duration = Math.max((frames.at(-1)?.time || 0) - (frames[0]?.time || 0), 1);
+  return Math.round((frames.length / duration) * 10) / 10;
+}
+
+function getGeminiVideoMime(file) {
+  const declared = String(file?.type || "").toLowerCase();
+  const name = String(file?.name || "").toLowerCase();
+  if (["video/mp4", "video/mpeg", "video/mov", "video/avi", "video/x-flv", "video/mpg", "video/webm", "video/wmv", "video/3gpp"].includes(declared)) return declared;
+  if (declared === "video/quicktime") return "video/mov";
+  if (declared === "video/x-msvideo") return "video/avi";
+  if (declared === "video/x-ms-wmv") return "video/wmv";
+  if (declared === "video/x-m4v") return "video/mp4";
+  if (name.endsWith(".mp4") || name.endsWith(".m4v")) return "video/mp4";
+  if (name.endsWith(".mov")) return "video/mov";
+  if (name.endsWith(".mpeg")) return "video/mpeg";
+  if (name.endsWith(".mpg")) return "video/mpg";
+  if (name.endsWith(".avi")) return "video/avi";
+  if (name.endsWith(".webm")) return "video/webm";
+  if (name.endsWith(".wmv")) return "video/wmv";
+  if (name.endsWith(".flv")) return "video/x-flv";
+  if (name.endsWith(".3gp") || name.endsWith(".3gpp")) return "video/3gpp";
+  return "";
 }
 
 function blobToBase64(blob) {
@@ -1311,8 +1415,16 @@ function handleUploadFile() {
   clearUploadPreview();
   resetDashboard();
   resetFeedbackChat();
+  setAnalyzing(false);
 
   if (!file) {
+    state.uploadFileBlob = null;
+    syncUploadControls();
+    return;
+  }
+
+  if (!validateUploadFile(file)) {
+    uploadFile.value = "";
     state.uploadFileBlob = null;
     syncUploadControls();
     return;
@@ -1335,9 +1447,9 @@ function handleUploadFile() {
     return;
   }
 
-  if (file.type.startsWith("video/") || file.type.startsWith("audio/")) {
+  if (isVideoFile(file) || file.type.startsWith("audio/")) {
     state.uploadUrl = URL.createObjectURL(file);
-    const media = document.createElement(file.type.startsWith("video/") ? "video" : "audio");
+    const media = document.createElement(isVideoFile(file) ? "video" : "audio");
     media.controls = true;
     media.src = state.uploadUrl;
     mediaPreview.appendChild(media);
@@ -1346,11 +1458,19 @@ function handleUploadFile() {
     state.uploadFileBlob = file;
     media.addEventListener("loadedmetadata", () => {
       state.uploadDuration = Number.isFinite(media.duration) ? Math.max(Math.round(media.duration), 1) : 60;
+      if (state.uploadDuration > UPLOAD_MAX_DURATION_SECONDS) {
+        say(`This upload is ${formatTime(state.uploadDuration)}. Please use a clip under ${formatTime(UPLOAD_MAX_DURATION_SECONDS)}.`, "confused");
+        uploadStatus.textContent = `Too long (${formatTime(state.uploadDuration)})`;
+        analyzeUploadBtn.disabled = true;
+        return;
+      }
       syncUploadControls();
     });
     speechStatus.textContent = "Upload media";
     syncUploadControls();
-    say("Media loaded. Add the transcript, then I will give feedback on the pitch.", "listening");
+    say(isVideoFile(file)
+      ? "Video loaded. I can review the audio and visual delivery directly; a transcript is optional."
+      : "Audio loaded. Add the transcript, then I will give feedback on the presentation.", "listening");
   }
 }
 
@@ -1358,10 +1478,32 @@ async function analyzeUpload() {
   const transcript = uploadTranscript.value.trim();
   const isVideoUpload = state.uploadMedia?.tagName === "VIDEO" && state.uploadFileBlob;
 
+  if (state.uploadFileBlob && !validateUploadFile(state.uploadFileBlob)) return;
+  if (isVideoUpload && state.uploadDuration > UPLOAD_MAX_DURATION_SECONDS) {
+    say(`Please trim the video under ${formatTime(UPLOAD_MAX_DURATION_SECONDS)} before analyzing.`, "confused");
+    return;
+  }
+
   if (!transcript && !isVideoUpload) {
     say("I need a transcript for content feedback. Paste the words from the presentation, then analyze again.", "confused");
     uploadTranscript.focus();
     return;
+  }
+
+  if (isVideoUpload) {
+    try {
+      await ensureMediaReady(state.uploadMedia);
+      state.uploadDuration = Number.isFinite(state.uploadMedia.duration) ? Math.max(Math.round(state.uploadMedia.duration), 1) : state.uploadDuration;
+    } catch {
+      say("I could not read this video's duration. Try exporting it as MP4 or WebM.", "confused");
+      return;
+    }
+    if (state.uploadDuration > UPLOAD_MAX_DURATION_SECONDS) {
+      say(`This upload is ${formatTime(state.uploadDuration)}. Please use a clip under ${formatTime(UPLOAD_MAX_DURATION_SECONDS)}.`, "confused");
+      uploadStatus.textContent = `Too long (${formatTime(state.uploadDuration)})`;
+      analyzeUploadBtn.disabled = true;
+      return;
+    }
   }
 
   state.transcript = transcript;
@@ -1374,18 +1516,27 @@ async function analyzeUpload() {
   resetInterruptionState();
   transcriptEl.textContent = transcript || "Video uploaded. Gemini will review the recording directly.";
   speechStatus.textContent = "Upload analyzed";
+  setAnalyzing(true, "Preparing upload", isVideoUpload ? "Checking video duration and extracting representative frames." : "Preparing transcript for coaching feedback.");
+  analyzeUploadBtn.disabled = true;
+  clearUploadBtn.disabled = true;
 
   const visual = await summarizeUploadVisual();
+  let frames = [];
   if (isVideoUpload) {
     recordingPlayback.src = state.uploadUrl;
-    recordingStatus.textContent = "Uploaded video";
     reviewPanel.classList.remove("hidden");
+    recordingStatus.textContent = "Extracting frames";
+    setAnalyzing(true, "Extracting frames", "Sampling timestamped frames for gaze, posture, and framing feedback.");
+    frames = await extractVideoFrames(state.uploadMedia, state.uploadDuration);
+    recordingStatus.textContent = frames.length ? `${frames.length} frames sampled` : "Uploaded video";
   }
   showFeedback({
     transcript,
     durationSeconds: state.uploadDuration || estimateDurationFromTranscript(transcript),
     visual,
     videoBlob: isVideoUpload ? state.uploadFileBlob : null,
+    frames,
+    preferVideoFeedback: isVideoUpload,
   });
 }
 
@@ -1409,6 +1560,112 @@ async function summarizeUploadVisual() {
   }
 }
 
+async function extractVideoFrames(video, fallbackDuration = 60) {
+  if (!video || video.tagName !== "VIDEO") return [];
+
+  try {
+    await ensureMediaReady(video);
+    const duration = Number.isFinite(video.duration) ? video.duration : fallbackDuration;
+    if (!Number.isFinite(duration) || duration <= 0) return [];
+
+    const wasPaused = video.paused;
+    const originalTime = video.currentTime;
+    const frameCanvas = document.createElement("canvas");
+    const aspect = video.videoWidth && video.videoHeight ? video.videoHeight / video.videoWidth : 9 / 16;
+    frameCanvas.width = UPLOAD_FRAME_WIDTH;
+    frameCanvas.height = Math.round(UPLOAD_FRAME_WIDTH * aspect);
+    const frameCtx = frameCanvas.getContext("2d");
+    const frames = [];
+
+    for (const time of buildFrameTimes(duration)) {
+      await seekMedia(video, time);
+      frameCtx.drawImage(video, 0, 0, frameCanvas.width, frameCanvas.height);
+      const dataUrl = frameCanvas.toDataURL("image/jpeg", UPLOAD_FRAME_QUALITY);
+      frames.push({
+        time: Math.round(time * 10) / 10,
+        mimeType: "image/jpeg",
+        data: dataUrl.split(",")[1] || "",
+        width: frameCanvas.width,
+        height: frameCanvas.height,
+      });
+    }
+
+    await seekMedia(video, Math.min(originalTime, duration));
+    if (!wasPaused) video.play().catch(() => {});
+    return frames.filter((frame) => frame.data);
+  } catch {
+    return [];
+  }
+}
+
+function buildFrameTimes(duration) {
+  const targetFps = duration <= 45 ? 2 : duration <= 120 ? 1.5 : 1;
+  const interval = 1 / targetFps;
+  const start = Math.min(0.35, Math.max(duration * 0.05, 0));
+  const end = Math.max(start, duration - 0.25);
+  const times = [];
+
+  for (let time = start; time <= end; time += interval) {
+    times.push(Math.min(time, end));
+  }
+
+  if (times.length <= UPLOAD_FRAME_MAX) return times;
+  const sampled = [];
+  for (let index = 0; index < UPLOAD_FRAME_MAX; index += 1) {
+    const sourceIndex = Math.round((index / Math.max(UPLOAD_FRAME_MAX - 1, 1)) * (times.length - 1));
+    sampled.push(times[sourceIndex]);
+  }
+  return sampled;
+}
+
+function ensureMediaReady(media) {
+  if (media.readyState >= 2 && Number.isFinite(media.duration)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const done = () => {
+      cleanup();
+      resolve();
+    };
+    const fail = () => {
+      cleanup();
+      reject(new Error("Media metadata unavailable"));
+    };
+    const cleanup = () => {
+      media.removeEventListener("loadedmetadata", done);
+      media.removeEventListener("loadeddata", done);
+      media.removeEventListener("error", fail);
+    };
+    media.addEventListener("loadedmetadata", done, { once: true });
+    media.addEventListener("loadeddata", done, { once: true });
+    media.addEventListener("error", fail, { once: true });
+  });
+}
+
+function seekMedia(media, time) {
+  return new Promise((resolve, reject) => {
+    const target = Math.max(0, Math.min(time, media.duration || time));
+    if (Math.abs((media.currentTime || 0) - target) < 0.03 && media.readyState >= 2) {
+      resolve();
+      return;
+    }
+
+    const done = () => {
+      cleanup();
+      resolve();
+    };
+    const fail = () => {
+      cleanup();
+      reject(new Error("Media seek failed"));
+    };
+    const cleanup = () => {
+      media.removeEventListener("seeked", done);
+      media.removeEventListener("error", fail);
+    };
+    media.addEventListener("seeked", done, { once: true });
+    media.addEventListener("error", fail, { once: true });
+    media.currentTime = target;
+  });
+}
+
 function clearUpload() {
   uploadFile.value = "";
   uploadTranscript.value = "";
@@ -1430,12 +1687,28 @@ function clearUploadPreview() {
 function syncUploadControls() {
   const hasFile = Boolean(uploadFile.files?.[0]);
   const hasTranscript = Boolean(uploadTranscript.value.trim());
-  analyzeUploadBtn.disabled = !hasFile && !hasTranscript;
+  const mediaTooLong = state.uploadMedia && state.uploadDuration > UPLOAD_MAX_DURATION_SECONDS;
+  analyzeUploadBtn.disabled = (!hasFile && !hasTranscript) || mediaTooLong;
   clearUploadBtn.disabled = !hasFile && !hasTranscript;
 }
 
 function isTextFile(file) {
   return file.type.startsWith("text/") || /\.(txt|md|vtt|srt)$/i.test(file.name);
+}
+
+function isVideoFile(file) {
+  return file.type.startsWith("video/") || /\.(mp4|mov|m4v|mpeg|mpg|avi|webm|wmv|flv|3gp|3gpp)$/i.test(file.name);
+}
+
+function validateUploadFile(file) {
+  if (!file) return false;
+  if ((isVideoFile(file) || file.type.startsWith("audio/")) && file.size > UPLOAD_MAX_BYTES) {
+    const maxMb = Math.round(UPLOAD_MAX_BYTES / 1024 / 1024);
+    say(`This file is too large. Please upload a media file under ${maxMb} MB.`, "confused");
+    uploadStatus.textContent = `Limit ${maxMb} MB`;
+    return false;
+  }
+  return true;
 }
 
 function cleanTranscriptFile(value) {
@@ -1536,14 +1809,14 @@ function scoreContent(transcript) {
 
 function buildRewrite(transcript, scores) {
   if (scores.problem < 6 || scores.user < 6) {
-    return "Instead of starting with the technology, start with the person: 'Students practicing important presentations usually get feedback too late. PitchMirror watches and listens in real time, then tells them what the audience actually heard and saw.'";
+    return "Instead of starting with the technology, start with the person: 'Students practicing important presentations usually get feedback too late. PitchCoach watches and listens in real time, then tells them what the audience actually heard and saw.'";
   }
 
   if (scores.cta < 6) {
     return "Keep your current opening, then end with a clear ask: 'Today we want judges to test a 60-second pitch and tell us whether the feedback feels like a real coach.'";
   }
 
-  return "Tighten the strongest version into one sentence: 'PitchMirror is a live AI audience member that helps students and founders fix delivery and content before the real room is watching.'";
+  return "Tighten the strongest version into one sentence: 'PitchCoach is a live AI audience member that helps students and founders fix delivery and content before the real room is watching.'";
 }
 
 function buildSpokenFeedback(wpm, fillers, scores, visual, audio = {}) {
@@ -2059,6 +2332,13 @@ function resetDashboard() {
   contentList.innerHTML = "";
   rewriteText.textContent = "";
   followupText.textContent = "";
+}
+
+function setAnalyzing(active, status = "Analyzing practice", detail = "Extracting speech, frames, and delivery signals.") {
+  analysisPanel.classList.toggle("hidden", !active);
+  analysisStatus.textContent = status;
+  analysisDetail.textContent = detail;
+  document.body.classList.toggle("is-analyzing", active);
 }
 
 function getElapsedSeconds() {

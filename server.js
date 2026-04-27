@@ -8,6 +8,7 @@ const root = fileURLToPath(new URL(".", import.meta.url));
 loadEnv();
 
 const port = Number(getCliPort() || process.env.PORT || 3000);
+const maxJsonBodyBytes = 145 * 1024 * 1024;
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -50,6 +51,10 @@ const server = createServer(async (request, response) => {
     await serveStatic(url.pathname, response, request.method === "HEAD");
   } catch (error) {
     console.error(error);
+    if (error.message === "Request body too large.") {
+      sendJson(response, 413, { error: "Upload is too large. Please use a shorter or smaller video." });
+      return;
+    }
     sendJson(response, 500, { error: "Internal server error" });
   }
 });
@@ -147,8 +152,8 @@ async function handleVideoFeedback(request, response) {
       return;
     }
 
-    const performanceNotes = await requestGeminiVideoFeedback(payload);
-    sendJson(response, 200, { performanceNotes, source: "gemini" });
+    const videoFeedback = await requestGeminiVideoFeedback(payload);
+    sendJson(response, 200, { ...videoFeedback, source: "gemini" });
   } catch (error) {
     console.error("Gemini video feedback failed:", error);
     sendJson(response, 200, { performanceNotes: [], source: "local", warning: "Gemini video unavailable." });
@@ -232,6 +237,18 @@ async function requestGeminiChat(payload) {
 async function requestGeminiVideoFeedback(payload) {
   const prompt = buildVideoPrompt(payload);
   const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  const mimeType = normalizeVideoMime(payload.mimeType, payload.fileName);
+  if (!mimeType) throw new Error(`Unsupported video MIME type: ${payload.mimeType || payload.fileName || "unknown"}`);
+  const videoBuffer = Buffer.from(payload.videoData, "base64");
+  const videoPart = videoBuffer.byteLength > 18 * 1024 * 1024
+    ? await uploadGeminiFile({ buffer: videoBuffer, mimeType, displayName: payload.fileName || "practice-video" })
+    : {
+      inlineData: {
+        mimeType,
+        data: payload.videoData,
+      },
+    };
+  const frameParts = normalizeFrameParts(payload.frames);
   const result = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: "POST",
     headers: {
@@ -243,13 +260,9 @@ async function requestGeminiVideoFeedback(payload) {
         {
           role: "user",
           parts: [
+            videoPart,
+            ...frameParts,
             { text: prompt },
-            {
-              inlineData: {
-                mimeType: payload.mimeType || "video/webm",
-                data: payload.videoData,
-              },
-            },
           ],
         },
       ],
@@ -269,7 +282,104 @@ async function requestGeminiVideoFeedback(payload) {
   const data = await result.json();
   const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim();
   if (!text) throw new Error("Gemini video response did not include JSON text.");
-  return normalizePerformanceNotes(JSON.parse(text).performanceNotes);
+  const parsed = JSON.parse(text);
+  return {
+    ...parsed,
+    performanceNotes: normalizePerformanceNotes(parsed.performanceNotes),
+  };
+}
+
+function normalizeFrameParts(frames = []) {
+  if (!Array.isArray(frames)) return [];
+  return frames
+    .slice(0, 80)
+    .filter((frame) => frame?.data && Number.isFinite(Number(frame.time)))
+    .flatMap((frame) => [
+      { text: `Sampled frame at ${formatSeconds(Number(frame.time))}.` },
+      {
+        inlineData: {
+          mimeType: frame.mimeType || "image/jpeg",
+          data: frame.data,
+        },
+      },
+    ]);
+}
+
+function formatSeconds(value) {
+  const seconds = Math.max(0, Math.round(value));
+  const minutes = String(Math.floor(seconds / 60)).padStart(2, "0");
+  const rest = String(seconds % 60).padStart(2, "0");
+  return `${minutes}:${rest}`;
+}
+
+async function uploadGeminiFile({ buffer, mimeType, displayName }) {
+  const start = await fetch("https://generativelanguage.googleapis.com/upload/v1beta/files", {
+    method: "POST",
+    headers: {
+      "x-goog-api-key": process.env.GEMINI_API_KEY,
+      "X-Goog-Upload-Protocol": "resumable",
+      "X-Goog-Upload-Command": "start",
+      "X-Goog-Upload-Header-Content-Length": String(buffer.byteLength),
+      "X-Goog-Upload-Header-Content-Type": mimeType,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ file: { display_name: displayName } }),
+  });
+
+  if (!start.ok) {
+    const body = await start.text();
+    throw new Error(`Gemini file upload start failed with ${start.status}: ${body}`);
+  }
+
+  const uploadUrl = start.headers.get("x-goog-upload-url");
+  if (!uploadUrl) throw new Error("Gemini file upload did not return an upload URL.");
+
+  const upload = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      "Content-Length": String(buffer.byteLength),
+      "X-Goog-Upload-Offset": "0",
+      "X-Goog-Upload-Command": "upload, finalize",
+    },
+    body: buffer,
+  });
+
+  if (!upload.ok) {
+    const body = await upload.text();
+    throw new Error(`Gemini file upload failed with ${upload.status}: ${body}`);
+  }
+
+  const data = await upload.json();
+  const file = await waitForGeminiFile(data.file);
+  return {
+    fileData: {
+      mimeType: file.mimeType || mimeType,
+      fileUri: file.uri,
+    },
+  };
+}
+
+async function waitForGeminiFile(file) {
+  if (!file?.name) throw new Error("Gemini file upload response did not include a file name.");
+  let current = file;
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    if (!current.state || current.state === "ACTIVE") return current;
+    if (current.state === "FAILED") throw new Error("Gemini file processing failed.");
+    await delay(2500);
+    const result = await fetch(`https://generativelanguage.googleapis.com/v1beta/${current.name}`, {
+      headers: { "x-goog-api-key": process.env.GEMINI_API_KEY },
+    });
+    if (!result.ok) {
+      const body = await result.text();
+      throw new Error(`Gemini file polling failed with ${result.status}: ${body}`);
+    }
+    current = await result.json();
+  }
+  throw new Error("Gemini file processing timed out.");
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function requestOpenAiFeedback(payload) {
@@ -293,7 +403,7 @@ async function requestOpenAiFeedback(payload) {
       text: {
         format: {
           type: "json_schema",
-          name: "pitchmirror_feedback",
+          name: "pitchcoach_feedback",
           strict: true,
           schema: feedbackSchema,
         },
@@ -317,7 +427,7 @@ async function requestOpenAiFeedback(payload) {
 
 function buildCoachPrompt(payload) {
   return [
-    "You are PitchMirror, a direct but constructive AI presentation coach.",
+    "You are PitchCoach, a direct but constructive AI presentation coach.",
     "Evaluate the user's practice presentation using the supplied context, transcript, delivery signals, and session timeline.",
     "Return coaching that feels like a real audience member, not a generic report.",
     "Use short, specific feedback. Mention only observable delivery signals.",
@@ -333,7 +443,7 @@ function buildCoachPrompt(payload) {
 
 function buildChatPrompt(payload) {
   return [
-    "You are PitchMirror, a practical live presentation coach.",
+    "You are PitchCoach, a practical live presentation coach.",
     "Answer the user's follow-up question using the previous transcript, delivery metrics, visual observations, timeline moments, and feedback.",
     "Be specific and concise. Do not invent emotional diagnoses. Refer only to observable behavior and wording.",
     "Return JSON with one field: answer.",
@@ -344,12 +454,17 @@ function buildChatPrompt(payload) {
 
 function buildVideoPrompt(payload) {
   return [
-    "You are reviewing a practice presentation video for observable delivery moments.",
-    "Find up to 6 timestamped moments that a speaker should review.",
-    "Use only observable cues: face visibility, gaze direction, head movement, posture, gestures, volume/energy if audible, and any obvious confusing wording from the provided context.",
+    "You are PitchCoach, a direct but constructive AI presentation coach reviewing an uploaded practice video.",
+    "Evaluate both what the speaker says and how they deliver it, using the video/audio plus the extra timestamped sampled frames.",
+    "If speech is audible, infer a practical transcript-level understanding from the audio. Do not require the user to paste a transcript.",
+    "Return the same dashboard shape as normal coaching, an inferredTranscript, plus up to 6 timestamped performanceNotes.",
+    "The sampled frames may be higher frequency than the model's default video sampling. Use them for gaze, notes-reading, head movement, posture, and framing.",
+    "Use only observable cues: face visibility, gaze direction, head movement, posture, gestures, volume, pacing, pauses, vocal energy, and spoken wording.",
     "Do not infer anxiety, confidence, truthfulness, political beliefs, personality, or protected traits.",
-    "Return JSON with performanceNotes. Each note needs time in seconds, type, label, and detail.",
-    "Allowed type values: eye, audio, pause, posture, wording.",
+    "For avatarState, choose listening, nodding, confused, or speaking.",
+    "For content metrics, score clarity, structure, specificity, evidence, and impact for the selected presentation type and audience.",
+    "Each performance note needs time in seconds, type, label, and detail. Allowed type values: eye, audio, pause, posture, wording.",
+    "If the audio is unclear, inferredTranscript can be a short summary of the spoken content instead of a verbatim transcript.",
     "",
     JSON.stringify(payload.context || {}, null, 2),
   ].join("\n");
@@ -473,6 +588,23 @@ const geminiChatSchema = {
 const geminiVideoSchema = {
   type: "OBJECT",
   properties: {
+    coachResponse: { type: "STRING" },
+    avatarState: { type: "STRING", enum: ["listening", "nodding", "confused", "speaking"] },
+    delivery: {
+      type: "ARRAY",
+      minItems: 5,
+      maxItems: 5,
+      items: geminiMetricSchema,
+    },
+    content: {
+      type: "ARRAY",
+      minItems: 5,
+      maxItems: 5,
+      items: geminiMetricSchema,
+    },
+    inferredTranscript: { type: "STRING" },
+    suggestedRewrite: { type: "STRING" },
+    followupQuestion: { type: "STRING" },
     performanceNotes: {
       type: "ARRAY",
       minItems: 0,
@@ -480,8 +612,8 @@ const geminiVideoSchema = {
       items: geminiPerformanceNoteSchema,
     },
   },
-  required: ["performanceNotes"],
-  propertyOrdering: ["performanceNotes"],
+  required: ["coachResponse", "avatarState", "delivery", "content", "inferredTranscript", "suggestedRewrite", "followupQuestion", "performanceNotes"],
+  propertyOrdering: ["coachResponse", "avatarState", "delivery", "content", "inferredTranscript", "suggestedRewrite", "followupQuestion", "performanceNotes"],
 };
 
 function extractResponseText(data) {
@@ -572,6 +704,26 @@ function normalizeNoteType(type = "wording") {
   return "wording";
 }
 
+function normalizeVideoMime(mimeType = "", fileName = "") {
+  const declared = String(mimeType || "").toLowerCase();
+  const name = String(fileName || "").toLowerCase();
+  if (["video/mp4", "video/mpeg", "video/mov", "video/avi", "video/x-flv", "video/mpg", "video/webm", "video/wmv", "video/3gpp"].includes(declared)) return declared;
+  if (declared === "video/quicktime") return "video/mov";
+  if (declared === "video/x-msvideo") return "video/avi";
+  if (declared === "video/x-ms-wmv") return "video/wmv";
+  if (declared === "video/x-m4v") return "video/mp4";
+  if (name.endsWith(".mp4") || name.endsWith(".m4v")) return "video/mp4";
+  if (name.endsWith(".mov")) return "video/mov";
+  if (name.endsWith(".mpeg")) return "video/mpeg";
+  if (name.endsWith(".mpg")) return "video/mpg";
+  if (name.endsWith(".avi")) return "video/avi";
+  if (name.endsWith(".webm")) return "video/webm";
+  if (name.endsWith(".wmv")) return "video/wmv";
+  if (name.endsWith(".flv")) return "video/x-flv";
+  if (name.endsWith(".3gp") || name.endsWith(".3gpp")) return "video/3gpp";
+  return "";
+}
+
 function scoreContent(transcript) {
   const text = transcript.toLowerCase();
   const has = (terms) => terms.some((term) => text.includes(term));
@@ -594,14 +746,14 @@ function buildCoachResponse(wpm, fillers, scores, visual) {
 
 function buildRewrite(scores) {
   if (scores.problem < 6 || scores.user < 6) {
-    return "Instead of starting with the technology, start with the person: 'Students practicing important presentations usually get feedback too late. PitchMirror watches and listens in real time, then tells them what the audience actually heard and saw.'";
+    return "Instead of starting with the technology, start with the person: 'Students practicing important presentations usually get feedback too late. PitchCoach watches and listens in real time, then tells them what the audience actually heard and saw.'";
   }
 
   if (scores.cta < 6) {
     return "Keep your current opening, then end with a clear ask: 'Today we want judges to test a 60-second pitch and tell us whether the feedback feels like a real coach.'";
   }
 
-  return "Tighten the strongest version into one sentence: 'PitchMirror is a live AI audience member that helps students and founders fix delivery and content before the real room is watching.'";
+  return "Tighten the strongest version into one sentence: 'PitchCoach is a live AI audience member that helps students and founders fix delivery and content before the real room is watching.'";
 }
 
 function followupFor(context) {
@@ -636,7 +788,14 @@ function clampScore(value) {
 
 async function readJsonBody(request) {
   const chunks = [];
-  for await (const chunk of request) chunks.push(chunk);
+  let total = 0;
+  for await (const chunk of request) {
+    total += chunk.length;
+    if (total > maxJsonBodyBytes) {
+      throw new Error("Request body too large.");
+    }
+    chunks.push(chunk);
+  }
   const raw = Buffer.concat(chunks).toString("utf8");
   return raw ? JSON.parse(raw) : {};
 }

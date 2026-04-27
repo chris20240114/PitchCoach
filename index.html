@@ -3,16 +3,17 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>PitchMirror - AI Presentation Coach</title>
+    <title>PitchCoach - AI Presentation Coach</title>
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
     <main class="app-shell">
-      <section class="workspace" aria-label="PitchMirror coach workspace">
+      <section class="workspace" aria-label="PitchCoach coach workspace">
         <header class="topbar">
           <div>
-            <p class="eyebrow">PitchMirror</p>
+            <p class="eyebrow">PitchCoach</p>
             <h1>Presentation Coach</h1>
+            <p class="subtitle">Practice live for up to 5 minutes or upload a short recording for multimodal feedback.</p>
           </div>
         </header>
 
@@ -79,7 +80,7 @@
               <p id="coachMessage" class="coach-message">Start a practice session. I will listen for content, delivery, pacing, filler words, and camera presence.</p>
             </div>
             <div class="coach-actions">
-              <button id="startBtn" class="primary">Start pitch</button>
+              <button id="startBtn" class="primary">Start practice</button>
               <button id="stopBtn" disabled>Stop</button>
               <button id="retryBtn" disabled>Retry</button>
             </div>
@@ -154,13 +155,22 @@
               <span id="uploadStatus">No file</span>
             </div>
             <div class="upload-controls">
-              <input id="uploadFile" type="file" accept=".txt,.md,.vtt,.srt,audio/*,video/*">
+              <input id="uploadFile" type="file" accept=".txt,.md,.vtt,.srt,audio/*,video/*,.mp4,.mov,.m4v,.mpeg,.mpg,.avi,.webm,.wmv,.flv,.3gp,.3gpp">
               <button id="analyzeUploadBtn" class="primary" disabled>Analyze upload</button>
               <button id="clearUploadBtn" disabled>Clear</button>
             </div>
+            <p class="upload-hint">Video uploads: max 5 minutes and 75 MB. Transcript is optional for video.</p>
             <textarea id="uploadTranscript" rows="6" placeholder="Paste or edit transcript"></textarea>
             <div id="mediaPreview" class="media-preview hidden"></div>
           </article>
+        </section>
+
+        <section id="analysisPanel" class="analysis-panel hidden" aria-live="polite">
+          <div class="analysis-spinner" aria-hidden="true"></div>
+          <div>
+            <strong id="analysisStatus">Analyzing practice</strong>
+            <p id="analysisDetail">Extracting speech, frames, and delivery signals.</p>
+          </div>
         </section>
 
         <section id="dashboard" class="dashboard hidden" aria-label="Feedback dashboard">
