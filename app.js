@@ -873,7 +873,13 @@ async function showFeedback(source = {}) {
   rewriteText.textContent = finalFeedback.suggestedRewrite;
   followupText.textContent = finalFeedback.followupQuestion;
   renderResultSummary(finalFeedback);
+  resultSummary.classList.remove("result-reveal");
+  void resultSummary.offsetWidth;
+  resultSummary.classList.add("result-reveal");
   dashboard.classList.remove("hidden");
+  dashboard.classList.remove("result-reveal");
+  void dashboard.offsetWidth;
+  dashboard.classList.add("result-reveal");
   const initialNotes = mergeTimelineNotes(finalFeedback.performanceNotes, timeline);
   renderTimeline(initialNotes);
   enableFeedbackChat({

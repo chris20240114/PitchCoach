@@ -730,6 +730,29 @@ select {
   font-weight: 800;
 }
 
+.result-reveal {
+  animation: result-rise 520ms cubic-bezier(0.2, 0.9, 0.22, 1) both;
+}
+
+.result-reveal .score-card {
+  animation: score-pop 680ms cubic-bezier(0.18, 1.2, 0.22, 1) both;
+}
+
+.result-reveal .radar-panel {
+  animation: panel-pop 620ms cubic-bezier(0.18, 1.16, 0.22, 1) 80ms both;
+}
+
+.result-reveal .radar-fill {
+  animation: radar-bloom 720ms cubic-bezier(0.18, 1.24, 0.22, 1) 160ms both;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.result-reveal .radar-line,
+.result-reveal .radar-dot {
+  animation: radar-draw 620ms ease 220ms both;
+}
+
 .dashboard .panel:nth-child(2)::before {
   background: var(--blue);
 }
@@ -981,6 +1004,73 @@ select {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes result-rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes score-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.94) translateY(12px);
+  }
+  62% {
+    opacity: 1;
+    transform: scale(1.035) translateY(0);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes panel-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.018);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes radar-bloom {
+  0% {
+    opacity: 0;
+    transform: scale(0.18) rotate(-6deg);
+  }
+  58% {
+    opacity: 1;
+    transform: scale(1.12) rotate(2deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+
+@keyframes radar-draw {
+  from {
+    opacity: 0;
+    transform: scale(0.86);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
   }
 }
 
